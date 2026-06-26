@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/sexxy/__init__.py
+src/sexxy/cli.py
+src/sexxy/gnomad.py
+src/sexxy/metadata.py
+src/sexxy/vcf.py
+src/sexxy.egg-info/PKG-INFO
+src/sexxy.egg-info/SOURCES.txt
+src/sexxy.egg-info/dependency_links.txt
+src/sexxy.egg-info/entry_points.txt
+src/sexxy.egg-info/requires.txt
+src/sexxy.egg-info/top_level.txt
+tests/test_sexxy.py

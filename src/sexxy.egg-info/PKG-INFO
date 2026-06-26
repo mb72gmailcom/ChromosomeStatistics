@@ -1,0 +1,120 @@
+Metadata-Version: 2.4
+Name: sexxy
+Version: 0.1.0
+Summary: Compute genotype statistics from VCF files for male and female children
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: pandas>=1.3
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+
+# sexXY
+
+Compute SNV genotype counts from VCF files, separately for male and female children.
+
+## Install
+
+```bash
+pip install -e ".[dev]"
+```
+
+## Metadata
+
+Tab- or comma-separated file with at least:
+
+| Column       | Description                          |
+|-------------|--------------------------------------|
+| `patient_id` | Sample / patient identifier          |
+| `father_id`  | Father ID (empty if not a child)     |
+| `mother_id`  | Mother ID (empty if not a child)     |
+| `sex`        | `Male`/`Female`, `1`/`2`, `M`/`F`, etc. |
+
+Children are rows with **both** a valid father and mother ID. Two ID lists are built: `male_children` and `female_children`.
+
+Column names are configurable via function arguments or CLI flags.
+
+## Usage
+
+### Python API
+
+```python
+from sexxy import load_children_by_sex, compute_genotype_counts
+
+male_children, female_children, children_df = load_children_by_sex(
+    "metadata.tsv",
+    sep="\t",
+)
+
+dgt_m, dgt_f = compute_genotype_counts(
+    "cohort.vcf.gz",
+    male_children,
+    female_children,
+    gnomad_af="/mnt/home/mbershadsky/ceph/gnomad.v4",  # per-chrom JSON
+    max_allele_freq=0.01,
+)
+
+print(dgt_m)  # e.g. {'0/0': 12345, '0/1': 678, '1/1': 90}
+print(dgt_f)
+```
+
+The VCF is scanned **once**; male and female genotype counts are accumulated in the same pass.
+
+### gnomAD v4 allele frequencies
+
+Per-chromosome JSON files are loaded on demand during the VCF scan:
+
+```
+{gnomad_af_dir}/{chrm}/{chrm}-common-af.json
+```
+
+Example (matches the reference workflow):
+
+```python
+gfile = f"/mnt/home/mbershadsky/ceph/gnomad.v4/{chrm}/{chrm}-common-af.json"
+with open(gfile) as f:
+    df = json.load(f)
+# variants with df.get(variant_id, 0) > 0.01 are skipped
+```
+
+```python
+from sexxy import GnomadAfStore, compute_genotype_counts
+
+store = GnomadAfStore("/mnt/home/mbershadsky/ceph/gnomad.v4")
+dgt_m, dgt_f = compute_genotype_counts(vcf, male_children, female_children, gnomad_af=store)
+```
+
+Or pass the base directory directly:
+
+```python
+dgt_m, dgt_f = compute_genotype_counts(
+    vcf, male_children, female_children,
+    gnomad_af="/mnt/home/mbershadsky/ceph/gnomad.v4",
+)
+```
+
+### CLI
+
+```bash
+sexxy cohort.vcf.gz metadata.tsv -o counts.json
+```
+
+Filter common variants with gnomAD v4 JSON files:
+
+```bash
+sexxy cohort.vcf.gz metadata.tsv \
+  --gnomad-af-dir /mnt/home/mbershadsky/ceph/gnomad.v4 \
+  -o counts.json
+```
+
+Or a flat CSV/TSV allele-frequency file:
+
+```bash
+sexxy cohort.vcf.gz metadata.tsv --allele-freqs gnomad_af.tsv --af-key-col id -o counts.json
+```
+
+## Behavior
+
+- **SNVs only**: rows where `len(REF) == 1` and `len(ALT) == 1`
+- **Genotype field**: first sub-field of `FORMAT` (e.g. `0/1` from `0/1:25:15,10`)
+- **Missing samples**: raises if a child ID is absent from the VCF header
+- Supports plain `.vcf` and `.vcf.gz`

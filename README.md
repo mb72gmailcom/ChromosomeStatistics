@@ -116,8 +116,34 @@ sexxy cohort.chrX.vcf.gz metadata.tsv --chromosome chrX -o counts.chrX
 
 ### CLI
 
+From an installed package:
+
 ```bash
 sexxy cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 -o counts.chr1.json
+```
+
+From a checkout (no install required):
+
+```bash
+python run.py cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 -o counts.chr1.json
+```
+
+Write outputs to a directory with ``--output-dir`` / ``-d``. The directory is
+created automatically if it does not exist.
+
+```bash
+python run.py cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 --output-dir results/
+# -> results/counts.chr1.json
+
+python run.py cohort.chrX.vcf.gz metadata.tsv --chromosome chrX --output-dir results/
+# -> results/counts.chrX.male.par1.json, ... (six files)
+```
+
+Combine with ``-o`` to set the filename/prefix inside the directory:
+
+```bash
+python run.py cohort.chrX.vcf.gz metadata.tsv --chromosome chrX \
+  --output-dir results/ -o mycohort.chrX
 ```
 
 Filter common variants with gnomAD v4 JSON files:

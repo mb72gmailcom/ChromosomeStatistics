@@ -32,6 +32,32 @@ class GenotypeCountResult:
         raise ValueError(f"region required for chrX results; choose from {self.regions}")
 
 
+def _ensure_parent_dir(path: Path) -> None:
+    parent = path.parent
+    if str(parent) not in ("", "."):
+        parent.mkdir(parents=True, exist_ok=True)
+
+
+def resolve_output_target(
+    output: str | Path | None,
+    output_dir: str | Path | None,
+    chromosome: str,
+) -> str | None:
+    """Combine *output* basename/prefix with *output_dir*, creating the directory."""
+    if output_dir is None:
+        return str(output) if output is not None else None
+
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    stem = f"counts.{chromosome}"
+    if output is not None:
+        p = Path(output)
+        stem = p.stem if p.suffix == ".json" else p.name
+
+    return str(directory / stem)
+
+
 def output_prefix(path: str | Path | None, chromosome: str) -> str:
     if path is None:
         return f"counts.{chromosome}"
@@ -68,6 +94,7 @@ def write_genotype_count_results(
                 ("female", result.female[region], female_children),
             ):
                 path = Path(f"{prefix}.{sex}.{region}.json")
+                _ensure_parent_dir(path)
                 payload = {
                     "chromosome": result.chromosome,
                     "region": region,
@@ -80,6 +107,7 @@ def write_genotype_count_results(
         return written
 
     path = single_output_path(output, result.chromosome)
+    _ensure_parent_dir(path)
     payload = {
         "chromosome": result.chromosome,
         "male_children": male_children,

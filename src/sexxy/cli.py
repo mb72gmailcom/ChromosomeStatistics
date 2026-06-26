@@ -10,7 +10,7 @@ import pandas as pd
 from sexxy.chrx import is_chrx
 from sexxy.gnomad import DEFAULT_GNOMAD_AF_DIR, GnomadAfStore
 from sexxy.metadata import load_children_by_sex
-from sexxy.results import result_to_json, write_genotype_count_results
+from sexxy.results import resolve_output_target, result_to_json, write_genotype_count_results
 from sexxy.vcf import compute_genotype_counts
 
 
@@ -38,9 +38,14 @@ def main(argv: list[str] | None = None) -> int:
         "-o",
         "--output",
         help=(
-            "Output path or prefix. Autosomes: one JSON file. "
-            "chrX: six files {prefix}.male.par1.json, .male.noPar.json, etc."
+            "Output filename or prefix (within --output-dir when set). "
+            "Autosomes: one JSON file. chrX: six region files."
         ),
+    )
+    parser.add_argument(
+        "-d",
+        "--output-dir",
+        help="Directory for output file(s); created if missing",
     )
     parser.add_argument("--patient-col", default="patient_id")
     parser.add_argument("--father-col", default="father_id")
@@ -141,11 +146,14 @@ def main(argv: list[str] | None = None) -> int:
 
     n_male = len(male_children)
     n_female = len(female_children)
+    output_target = resolve_output_target(
+        args.output, args.output_dir, args.chromosome
+    )
 
     if is_chrx(args.chromosome):
         paths = write_genotype_count_results(
             result,
-            args.output,
+            output_target,
             male_children=n_male,
             female_children=n_female,
         )
@@ -153,10 +161,10 @@ def main(argv: list[str] | None = None) -> int:
             print(path, file=sys.stderr)
         return 0
 
-    if args.output:
+    if output_target is not None:
         write_genotype_count_results(
             result,
-            args.output,
+            output_target,
             male_children=n_male,
             female_children=n_female,
         )

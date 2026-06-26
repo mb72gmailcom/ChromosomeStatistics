@@ -6,7 +6,7 @@ import pytest
 from sexxy.chrx import chrx_region
 from sexxy.gnomad import GnomadAfStore, gnomad_af_path, load_gnomad_af_json
 from sexxy.metadata import _normalize_sex, load_children_by_sex
-from sexxy.results import write_genotype_count_results
+from sexxy.results import resolve_output_target, write_genotype_count_results
 from sexxy.vcf import (
     _allele_balance,
     _passes_genotype_filters,
@@ -347,3 +347,30 @@ def test_chrx_nonpar_filter_overrides(tmp_path: Path, metadata_path: Path):
     )
     assert relaxed_nonpar.male_counts("par1") == {}
     assert relaxed_nonpar.male_counts("noPar") == {"0/1": 1}
+
+
+def test_write_output_dir(chrx_vcf_path: Path, metadata_path: Path, tmp_path: Path):
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    result = compute_genotype_counts(
+        chrx_vcf_path, male, female, chromosome="chrX"
+    )
+    out_dir = tmp_path / "results"
+    target = resolve_output_target(None, out_dir, "chrX")
+    paths = write_genotype_count_results(
+        result, target, male_children=len(male), female_children=len(female)
+    )
+    assert out_dir.is_dir()
+    assert all(p.parent == out_dir for p in paths)
+    assert (out_dir / "counts.chrX.male.par1.json") in paths
+
+
+def test_write_creates_nested_output_dir(tmp_path: Path, metadata_path: Path, vcf_path: Path):
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    result = compute_genotype_counts(vcf_path, male, female, chromosome="chr1")
+    out = tmp_path / "nested" / "results" / "counts.chr1.json"
+    paths = write_genotype_count_results(
+        result, out, male_children=len(male), female_children=len(female)
+    )
+    assert paths == [out]
+    assert out.is_file()
+    assert out.parent.parent.name == "nested"

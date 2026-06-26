@@ -12,16 +12,19 @@ pip install -e ".[dev]"
 
 Tab- or comma-separated file with at least:
 
-| Column       | Description                          |
-|-------------|--------------------------------------|
-| `patient_id` | Sample / patient identifier          |
-| `father_id`  | Father ID (empty if not a child)     |
-| `mother_id`  | Mother ID (empty if not a child)     |
-| `sex`        | `Male`/`Female`, `1`/`2`, `M`/`F`, etc. |
+| Column | Description |
+|--------|-------------|
+| `spid` | Patient / sample identifier |
+| `sfid` | Family identifier (optional; not used in counting) |
+| `father` | Father ID (empty if not a child) |
+| `mother` | Mother ID (empty if not a child) |
+| `sex` | `Male`/`Female`, `1`/`2`, `M`/`F`, etc. |
 
 Children are rows with **both** a valid father and mother ID. Two ID lists are built: `male_children` and `female_children`.
 
-Column names are configurable via function arguments or CLI flags.
+Column names are configurable via function arguments or CLI flags
+(``--patient-col``, ``--father-col``, ``--mother-col``, ``--sex-col``) if your
+file uses different headers.
 
 ## Usage
 

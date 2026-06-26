@@ -23,7 +23,7 @@ from sexxy.vcf import (
 def metadata_path(tmp_path: Path) -> Path:
     path = tmp_path / "metadata.tsv"
     path.write_text(
-        "patient_id\tfamily_id\tfather_id\tmother_id\tsex\n"
+        "spid\tsfid\tfather\tmother\tsex\n"
         "c1\tf1\tp1\tp2\tmale\n"
         "c2\tf1\tp1\tp2\tfemale\n"
         "c3\tf2\t\tp3\tfemale\n"
@@ -78,7 +78,7 @@ def test_normalize_sex(raw, expected):
 def test_load_children_by_sex_male_female_labels(tmp_path: Path):
     path = tmp_path / "metadata.tsv"
     path.write_text(
-        "patient_id\tfamily_id\tfather_id\tmother_id\tsex\n"
+        "spid\tsfid\tfather\tmother\tsex\n"
         "c1\tf1\tp1\tp2\tMale\n"
         "c2\tf1\tp1\tp2\tFemale\n"
     )
@@ -90,7 +90,7 @@ def test_load_children_by_sex_male_female_labels(tmp_path: Path):
 def test_load_children_by_sex_numeric_labels(tmp_path: Path):
     path = tmp_path / "metadata.tsv"
     path.write_text(
-        "patient_id\tfamily_id\tfather_id\tmother_id\tsex\n"
+        "spid\tsfid\tfather\tmother\tsex\n"
         "c1\tf1\tp1\tp2\t1\n"
         "c2\tf1\tp1\tp2\t2\n"
     )

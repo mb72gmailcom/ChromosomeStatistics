@@ -54,9 +54,9 @@ def main(argv: list[str] | None = None) -> int:
         "--output-dir",
         help="Directory for output file(s); created if missing",
     )
-    parser.add_argument("--patient-col", default="patient_id")
-    parser.add_argument("--father-col", default="father_id")
-    parser.add_argument("--mother-col", default="mother_id")
+    parser.add_argument("--patient-col", default="spid")
+    parser.add_argument("--father-col", default="father")
+    parser.add_argument("--mother-col", default="mother")
     parser.add_argument("--sex-col", default="sex")
     parser.add_argument("--metadata-sep", default=None, help="Metadata delimiter")
     parser.add_argument(

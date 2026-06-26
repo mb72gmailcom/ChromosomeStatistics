@@ -65,9 +65,9 @@ def _normalize_sex(value) -> str | None:
 def load_children_by_sex(
     metadata_path: str,
     *,
-    patient_col: str = "patient_id",
-    father_col: str = "father_id",
-    mother_col: str = "mother_id",
+    patient_col: str = "spid",
+    father_col: str = "father",
+    mother_col: str = "mother",
     sex_col: str = "sex",
     sep: str | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:

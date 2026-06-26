@@ -8,9 +8,7 @@ version = "0.1.0"
 description = "Compute genotype statistics from VCF files for male and female children"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = [
-    "pandas>=1.3",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]

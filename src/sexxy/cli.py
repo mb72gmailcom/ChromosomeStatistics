@@ -5,21 +5,28 @@ from __future__ import annotations
 import argparse
 import sys
 
-import pandas as pd
-
 from sexxy.chrx import is_chrx
-from sexxy.gnomad import DEFAULT_GNOMAD_AF_DIR, GnomadAfStore
+from sexxy.gnomad import DEFAULT_GNOMAD_AF_DIR
 from sexxy.metadata import load_children_by_sex
 from sexxy.results import resolve_output_target, result_to_json, write_genotype_count_results
+from sexxy.table import read_table
 from sexxy.vcf import compute_genotype_counts
 
 
 def _load_allele_freqs(path: str, key_col: str) -> dict[str, float]:
-    df = pd.read_csv(path, sep=None, engine="python", dtype=str)
-    if key_col not in df.columns:
+    fieldnames, rows = read_table(path)
+    if key_col not in fieldnames:
         raise ValueError(f"allele frequency file missing column: {key_col!r}")
-    af_col = "af" if "af" in df.columns else df.columns[-1]
-    return dict(zip(df[key_col], pd.to_numeric(df[af_col], errors="coerce").fillna(0)))
+    af_col = "af" if "af" in fieldnames else fieldnames[-1]
+    out: dict[str, float] = {}
+    for row in rows:
+        key = row[key_col]
+        raw = row.get(af_col, "")
+        try:
+            out[key] = float(raw) if raw != "" else 0.0
+        except ValueError:
+            out[key] = 0.0
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

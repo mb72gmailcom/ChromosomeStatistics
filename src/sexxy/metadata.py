@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import math
 from typing import Mapping, Sequence
 
-import pandas as pd
+from sexxy.table import read_table
 
 # Values treated as missing parent IDs.
 _MISSING = frozenset({None, "", ".", "NA", "na", "NaN", "nan", "0", 0})
 
 
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return False
+
+
 def _is_valid_id(value) -> bool:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if _is_missing(value):
         return False
     return str(value).strip() not in _MISSING
 
@@ -23,7 +32,7 @@ def _normalize_sex(value) -> str | None:
     - Text: ``Male``, ``Female``, ``male``, ``female``, ``M``, ``F``
     - Numeric codes: ``1`` (male), ``2`` (female), including ``1.0`` / ``2.0``
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if _is_missing(value):
         return None
 
     if isinstance(value, bool):
@@ -61,28 +70,34 @@ def load_children_by_sex(
     mother_col: str = "mother_id",
     sex_col: str = "sex",
     sep: str | None = None,
-) -> tuple[list[str], list[str], pd.DataFrame]:
-    """Load metadata and return (male_children, female_children, children_df).
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Load metadata and return (male_children, female_children, children_rows).
 
     Children are rows with valid father and mother IDs. Sex must be recognized
     as male or female; rows with unknown sex are skipped.
 
     Sex labels may be text (``Male``/``Female``) or numeric codes (``1``/``2``).
     """
-    df = pd.read_csv(metadata_path, sep=sep, dtype=str, keep_default_na=False)
+    _fieldnames, rows = read_table(metadata_path, sep=sep)
     for col in (patient_col, father_col, mother_col, sex_col):
-        if col not in df.columns:
+        if col not in _fieldnames:
             raise ValueError(f"metadata missing required column: {col!r}")
 
-    has_parents = df[father_col].map(_is_valid_id) & df[mother_col].map(_is_valid_id)
-    children = df.loc[has_parents].copy()
-    children["_sex_norm"] = children[sex_col].map(_normalize_sex)
+    male_children: list[str] = []
+    female_children: list[str] = []
+    children_rows: list[dict[str, str]] = []
 
-    male_children = children.loc[children["_sex_norm"] == "male", patient_col].tolist()
-    female_children = children.loc[children["_sex_norm"] == "female", patient_col].tolist()
-    children = children.drop(columns=["_sex_norm"])
+    for row in rows:
+        if not (_is_valid_id(row[father_col]) and _is_valid_id(row[mother_col])):
+            continue
+        sex_norm = _normalize_sex(row[sex_col])
+        children_rows.append(row)
+        if sex_norm == "male":
+            male_children.append(row[patient_col])
+        elif sex_norm == "female":
+            female_children.append(row[patient_col])
 
-    return male_children, female_children, children
+    return male_children, female_children, children_rows
 
 
 def sample_column_indices(

@@ -22,6 +22,8 @@ Tab- or comma-separated file with at least:
 
 Children are rows with **both** a valid father and mother ID. Two ID lists are built: `male_children` and `female_children`.
 
+Only children whose **sample ID appears in the VCF header** are included in counting. Children present in metadata but absent from the VCF are excluded automatically; the CLI prints how many were dropped. Use ``--strict`` to fail instead if any child is missing from the VCF.
+
 Column names are configurable via function arguments or CLI flags
 (``--patient-col``, ``--father-col``, ``--mother-col``, ``--sex-col``) if your
 file uses different headers.
@@ -58,6 +60,28 @@ print(result.female_counts())
 
 The VCF is scanned **once**; male and female genotype counts are accumulated in the same pass.
 
+### Output files
+
+**Autosomes and chrY** — two files (no ``region`` field):
+
+```
+counts.chr19.male.json
+counts.chr19.female.json
+```
+
+Example ``counts.chr19.female.json``:
+
+```json
+{
+  "chromosome": "chr19",
+  "sex": "female",
+  "female_children": 120,
+  "gt_counts": {"0/0": 520, "0/1": 28}
+}
+```
+
+Male files use ``"sex": "male"`` and ``male_children`` only.
+
 ### gnomAD v4 allele frequencies
 
 For a given chromosome, the AF file is loaded once:
@@ -89,29 +113,51 @@ print(result.male_counts())
 
 ### chrX regions
 
-For chrX, counts are split into three regions (sites outside these intervals are
-skipped):
+For chrX, **six** output files are written (male and female for each region):
+
+```
+counts.chrX.male.Par1.json
+counts.chrX.male.noPar.json
+counts.chrX.male.Par2.json
+counts.chrX.female.Par1.json
+counts.chrX.female.noPar.json
+counts.chrX.female.Par2.json
+```
+
+Example ``counts.chrX.male.Par1.json``:
+
+```json
+{
+  "chromosome": "chrX",
+  "region": "Par1",
+  "sex": "male",
+  "male_children": 115,
+  "gt_counts": {"0/0": 500, "0/1": 30}
+}
+```
+
+Female files have ``"sex": "female"``, ``female_children``, and female ``gt_counts`` only.
 
 | Region | Start | End |
 |--------|------:|----:|
-| `par1` | 10,001 | 2,781,479 |
+| `Par1` | 10,001 | 2,781,479 |
 | `noPar` | 2,781,489 | 155,701,382 |
-| `par2` | 155,701,383 | 156,030,895 |
+| `Par2` | 155,701,383 | 156,030,895 |
 
 ```python
 from sexxy import compute_genotype_counts, write_genotype_count_results
 
 result = compute_genotype_counts(vcf, male_children, female_children, chromosome="chrX")
-print(result.male_counts("par1"))
+print(result.male_counts("Par1"))
 print(result.female_counts("noPar"))
 
 write_genotype_count_results(result, "counts.chrX", male_children=len(male_children), female_children=len(female_children))
-# writes counts.chrX.male.par1.json, counts.chrX.male.noPar.json, counts.chrX.male.par2.json,
-#         counts.chrX.female.par1.json, counts.chrX.female.noPar.json, counts.chrX.female.par2.json
+# writes counts.chrX.male.Par1.json, ... (six files total)
 ```
 
 Use `--min-gq-nonpar`, `--min-dp-nonpar`, and `--ab-threshold-nonpar` to apply different
-quality cutoffs in the `noPar` region (defaults match the global flags).
+quality cutoffs for **male** calls in the `noPar` region only (defaults match the global
+flags). Female calls always use the global cutoffs in all chrX regions.
 
 ```bash
 sexxy cohort.chrX.vcf.gz metadata.tsv --chromosome chrX -o counts.chrX
@@ -122,13 +168,19 @@ sexxy cohort.chrX.vcf.gz metadata.tsv --chromosome chrX -o counts.chrX
 From an installed package:
 
 ```bash
-sexxy cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 -o counts.chr1.json
+sexxy cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 --output-dir results/
+# -> results/counts.chr1.male.json, results/counts.chr1.female.json,
+#    results/counts.chr1.params.json
 ```
+
+The **params file** records inputs, filters, cohort sizes (including any children
+excluded because they are absent from the VCF), and paths to all output files.
+Use it to reproduce or audit a run.
 
 From a checkout (no install required):
 
 ```bash
-python run.py cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 -o counts.chr1.json
+python run.py cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 --output-dir results/
 ```
 
 Write outputs to a directory with ``--output-dir`` / ``-d``. The directory is
@@ -136,10 +188,10 @@ created automatically if it does not exist.
 
 ```bash
 python run.py cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 --output-dir results/
-# -> results/counts.chr1.json
+# -> results/counts.chr1.male.json, results/counts.chr1.female.json
 
 python run.py cohort.chrX.vcf.gz metadata.tsv --chromosome chrX --output-dir results/
-# -> results/counts.chrX.male.par1.json, ... (six files)
+# -> results/counts.chrX.male.Par1.json, ... (six files)
 ```
 
 Combine with ``-o`` to set the filename/prefix inside the directory:
@@ -155,7 +207,7 @@ Filter common variants with gnomAD v4 JSON files:
 sexxy cohort.chr1.vcf.gz metadata.tsv \
   --chromosome chr1 \
   --gnomad-af-dir /mnt/home/mbershadsky/ceph/gnomad.v4 \
-  -o counts.chr1.json
+  --output-dir results/
 ```
 
 Or a flat chromosome-specific allele-frequency file:
@@ -165,7 +217,7 @@ sexxy cohort.chr1.vcf.gz metadata.tsv \
   --chromosome chr1 \
   --allele-freqs chr1-common-af.tsv \
   --af-key-col id \
-  -o counts.chr1.json
+  --output-dir results/
 ```
 
 ## Behavior
@@ -187,8 +239,9 @@ Set any of these parameters to enable per-call filtering (unset = no filter):
 
 `0/0` calls are not subject to the AB filter. When `AB` is absent, it is computed as `alt / (ref + alt)` from `AD`.
 
-For chrX `noPar`, you can override the cutoffs with `min_gq_nonpar`, `min_dp_nonpar`, and
-`ab_threshold_nonpar` (each defaults to the global value when unset).
+For chrX `noPar` **male** calls, you can override the cutoffs with `min_gq_nonpar`,
+`min_dp_nonpar`, and `ab_threshold_nonpar` (each defaults to the global value when unset).
+Female calls always use the global filters in all chrX regions.
 
 ```python
 result = compute_genotype_counts(
@@ -225,5 +278,5 @@ CLI:
 
 ```bash
 sexxy cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 \
-  --min-gq 20 --min-dp 10 --ab-threshold 0.2 -o counts.chr1.json
+  --min-gq 20 --min-dp 10 --ab-threshold 0.2 --output-dir results/
 ```

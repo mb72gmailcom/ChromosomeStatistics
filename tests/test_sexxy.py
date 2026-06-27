@@ -3,10 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from sexxy.chrx import chrx_region
+from sexxy.chrx import chrx_region, CHRX_REGION_ORDER
 from sexxy.gnomad import GnomadAfStore, gnomad_af_path, load_gnomad_af_json
-from sexxy.metadata import _normalize_sex, load_children_by_sex
-from sexxy.results import resolve_output_target, write_genotype_count_results
+from sexxy.metadata import filter_children_to_vcf, load_children_by_sex
+from sexxy.results import (
+    CHRX_FEMALE_OUTPUT_KEYS,
+    CHRX_MALE_OUTPUT_KEYS,
+    FEMALE_OUTPUT_KEYS,
+    MALE_OUTPUT_KEYS,
+    resolve_output_target,
+    write_genotype_count_results,
+)
 from sexxy.vcf import (
     _allele_balance,
     _passes_genotype_filters,
@@ -261,12 +268,12 @@ def test_passes_genotype_filters_ab_only_on_het_hom_alt():
 @pytest.mark.parametrize(
     ("pos", "region"),
     [
-        (10_001, "par1"),
-        (2_781_479, "par1"),
+        (10_001, "Par1"),
+        (2_781_479, "Par1"),
         (2_781_489, "noPar"),
         (155_701_382, "noPar"),
-        (155_701_383, "par2"),
-        (156_030_895, "par2"),
+        (155_701_383, "Par2"),
+        (156_030_895, "Par2"),
         (2_781_480, None),
     ],
 )
@@ -293,34 +300,50 @@ def test_compute_genotype_counts_chrx_regions(chrx_vcf_path: Path, metadata_path
     result = compute_genotype_counts(
         chrx_vcf_path, male, female, chromosome="chrX"
     )
-    assert result.regions == ("par1", "noPar", "par2")
-    assert result.male_counts("par1") == {"0/0": 1}
-    assert result.female_counts("par1") == {"0/1": 1}
+    assert result.regions == ("Par1", "noPar", "Par2")
+    assert result.male_counts("Par1") == {"0/0": 1}
+    assert result.female_counts("Par1") == {"0/1": 1}
     assert result.male_counts("noPar") == {"0/1": 1}
     assert result.female_counts("noPar") == {"0/0": 1}
-    assert result.male_counts("par2") == {"1/1": 1}
-    assert result.female_counts("par2") == {"0/1": 1}
+    assert result.male_counts("Par2") == {"1/1": 1}
+    assert result.female_counts("Par2") == {"0/1": 1}
 
 
-def test_write_chrx_six_output_files(chrx_vcf_path: Path, metadata_path: Path, tmp_path: Path):
+def test_write_chrx_region_output_files(chrx_vcf_path: Path, metadata_path: Path, tmp_path: Path):
     male, female, _ = load_children_by_sex(metadata_path, sep="\t")
     result = compute_genotype_counts(
         chrx_vcf_path, male, female, chromosome="chrX"
     )
     prefix = tmp_path / "counts.chrX"
     paths = write_genotype_count_results(
-        result, prefix, male_children=len(male), female_children=len(female)
+        result, prefix, male_children=result.male_cohort_size, female_children=result.female_cohort_size
     )
     assert len(paths) == 6
     names = {p.name for p in paths}
     assert names == {
-        "counts.chrX.male.par1.json",
+        "counts.chrX.male.Par1.json",
         "counts.chrX.male.noPar.json",
-        "counts.chrX.male.par2.json",
-        "counts.chrX.female.par1.json",
+        "counts.chrX.male.Par2.json",
+        "counts.chrX.female.Par1.json",
         "counts.chrX.female.noPar.json",
-        "counts.chrX.female.par2.json",
+        "counts.chrX.female.Par2.json",
     }
+    male_par1 = json.loads((tmp_path / "counts.chrX.male.Par1.json").read_text())
+    assert male_par1 == {
+        "chromosome": "chrX",
+        "gt_counts": {"0/0": 1},
+        "male_children": 1,
+        "region": "Par1",
+        "sex": "male",
+    }
+    for region in CHRX_REGION_ORDER:
+        for sex in ("male", "female"):
+            data = json.loads((tmp_path / f"counts.chrX.{sex}.{region}.json").read_text())
+            expected_keys = CHRX_MALE_OUTPUT_KEYS if sex == "male" else CHRX_FEMALE_OUTPUT_KEYS
+            assert set(data.keys()) == set(expected_keys)
+            assert data["region"] == region
+            assert data["sex"] == sex
+            assert "female_children" not in data if sex == "male" else "male_children" not in data
 
 
 def test_chrx_nonpar_filter_overrides(tmp_path: Path, metadata_path: Path):
@@ -339,14 +362,35 @@ def test_chrx_nonpar_filter_overrides(tmp_path: Path, metadata_path: Path):
     strict = compute_genotype_counts(
         path, male, female, chromosome="chrX", min_dp=30
     )
-    assert strict.male_counts("par1") == {}
+    assert strict.male_counts("Par1") == {}
     assert strict.male_counts("noPar") == {}
+    assert strict.female_counts("Par1") == {"0/0": 1}
+    assert strict.female_counts("noPar") == {"0/0": 1}
 
     relaxed_nonpar = compute_genotype_counts(
         path, male, female, chromosome="chrX", min_dp=30, min_dp_nonpar=20
     )
-    assert relaxed_nonpar.male_counts("par1") == {}
+    assert relaxed_nonpar.male_counts("Par1") == {}
     assert relaxed_nonpar.male_counts("noPar") == {"0/1": 1}
+    assert relaxed_nonpar.female_counts("Par1") == {"0/0": 1}
+    assert relaxed_nonpar.female_counts("noPar") == {"0/0": 1}
+
+
+def test_chrx_nonpar_overrides_do_not_apply_to_females(tmp_path: Path, metadata_path: Path):
+    fmt = "GT:DP:AD:SB:GQ:PL"
+    path = tmp_path / "chrx_female_noPar.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        f"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tc1\tc2\n"
+        f"chrX\t2781489\tnp\tA\tG\t.\t.\t.\t{fmt}\t"
+        "0/1:25:12,13:.:50:.\t0/1:25:12,13:.:50:.\n"
+    )
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    result = compute_genotype_counts(
+        path, male, female, chromosome="chrX", min_dp=30, min_dp_nonpar=20
+    )
+    assert result.male_counts("noPar") == {"0/1": 1}
+    assert result.female_counts("noPar") == {}
 
 
 def test_write_output_dir(chrx_vcf_path: Path, metadata_path: Path, tmp_path: Path):
@@ -357,20 +401,39 @@ def test_write_output_dir(chrx_vcf_path: Path, metadata_path: Path, tmp_path: Pa
     out_dir = tmp_path / "results"
     target = resolve_output_target(None, out_dir, "chrX")
     paths = write_genotype_count_results(
-        result, target, male_children=len(male), female_children=len(female)
+        result, target, male_children=result.male_cohort_size, female_children=result.female_cohort_size
     )
     assert out_dir.is_dir()
     assert all(p.parent == out_dir for p in paths)
-    assert (out_dir / "counts.chrX.male.par1.json") in paths
+    assert (out_dir / "counts.chrX.male.Par1.json") in paths
+
+
+def test_write_autosome_sex_output_files(vcf_path: Path, metadata_path: Path, tmp_path: Path):
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    result = compute_genotype_counts(vcf_path, male, female, chromosome="chr1")
+    prefix = tmp_path / "counts.chr1"
+    paths = write_genotype_count_results(
+        result, prefix, male_children=result.male_cohort_size, female_children=result.female_cohort_size
+    )
+    assert len(paths) == 2
+    assert {p.name for p in paths} == {"counts.chr1.male.json", "counts.chr1.female.json"}
+    male_data = json.loads((tmp_path / "counts.chr1.male.json").read_text())
+    assert set(male_data.keys()) == set(MALE_OUTPUT_KEYS)
+    assert male_data["sex"] == "male"
+    assert "region" not in male_data
+    female_data = json.loads((tmp_path / "counts.chr1.female.json").read_text())
+    assert set(female_data.keys()) == set(FEMALE_OUTPUT_KEYS)
+    assert female_data["sex"] == "female"
 
 
 def test_write_creates_nested_output_dir(tmp_path: Path, metadata_path: Path, vcf_path: Path):
     male, female, _ = load_children_by_sex(metadata_path, sep="\t")
     result = compute_genotype_counts(vcf_path, male, female, chromosome="chr1")
-    out = tmp_path / "nested" / "results" / "counts.chr1.json"
+    out_dir = tmp_path / "nested" / "results"
+    target = resolve_output_target(None, out_dir, "chr1")
     paths = write_genotype_count_results(
-        result, out, male_children=len(male), female_children=len(female)
+        result, target, male_children=result.male_cohort_size, female_children=result.female_cohort_size
     )
-    assert paths == [out]
-    assert out.is_file()
-    assert out.parent.parent.name == "nested"
+    assert len(paths) == 2
+    assert (out_dir / "counts.chr1.male.json").is_file()
+    assert (out_dir / "counts.chr1.female.json").is_file()

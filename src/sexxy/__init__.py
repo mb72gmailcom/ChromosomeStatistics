@@ -3,7 +3,7 @@
 from sexxy.chrx import CHRX_REGIONS, chrx_region, is_chrx
 from sexxy.gnomad import GnomadAfStore, DEFAULT_GNOMAD_AF_DIR, gnomad_af_path, load_gnomad_af_json
 from sexxy.metadata import load_children_by_sex
-from sexxy.results import GenotypeCountResult, resolve_output_target, write_genotype_count_results
+from sexxy.results import GenotypeCountResult, resolve_output_target, write_genotype_count_results, write_run_params
 from sexxy.vcf import chrom_matches, compute_genotype_counts, is_snv
 
 __all__ = [
@@ -21,5 +21,6 @@ __all__ = [
     "load_gnomad_af_json",
     "resolve_output_target",
     "write_genotype_count_results",
+    "write_run_params",
 ]
 __version__ = "0.1.0"

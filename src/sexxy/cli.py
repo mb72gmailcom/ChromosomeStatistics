@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from sexxy.chrx import is_chrx
+from sexxy import __version__
 from sexxy.gnomad import DEFAULT_GNOMAD_AF_DIR
 from sexxy.metadata import load_children_by_sex
-from sexxy.results import resolve_output_target, result_to_json, write_genotype_count_results
+from sexxy.results import (
+    resolve_output_target,
+    write_genotype_count_results,
+    write_run_params,
+)
 from sexxy.table import read_table
 from sexxy.vcf import compute_genotype_counts
 
@@ -46,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         help=(
             "Output filename or prefix (within --output-dir when set). "
-            "Autosomes: one JSON file. chrX: six region files."
+            "Autosomes/chrY: two files ({prefix}.male.json, .female.json). "
+            "chrX: six files (male/female x Par1/noPar/Par2)."
         ),
     )
     parser.add_argument(
@@ -100,19 +105,27 @@ def main(argv: list[str] | None = None) -> int:
         "--min-gq-nonpar",
         type=float,
         default=None,
-        help="chrX noPar region GQ cutoff (default: --min-gq)",
+        help="chrX noPar GQ cutoff for males only (default: --min-gq)",
     )
     parser.add_argument(
         "--min-dp-nonpar",
         type=int,
         default=None,
-        help="chrX noPar region DP cutoff (default: --min-dp)",
+        help="chrX noPar DP cutoff for males only (default: --min-dp)",
     )
     parser.add_argument(
         "--ab-threshold-nonpar",
         type=float,
         default=None,
-        help="chrX noPar region AB cutoff (default: --ab-threshold)",
+        help="chrX noPar AB cutoff for males only (default: --ab-threshold)",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Require every metadata child to appear in the VCF header; "
+            "default is to exclude children not present in the VCF"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -134,6 +147,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.gnomad_af_dir is not None:
         gnomad_af = args.gnomad_af_dir
 
+    def _report_excluded(excluded_male: list[str], excluded_female: list[str]) -> None:
+        nm, nf = len(excluded_male), len(excluded_female)
+        print(
+            f"Excluded {nm} male and {nf} female children not in VCF header",
+            file=sys.stderr,
+        )
+        examples = excluded_male[:3] + excluded_female[:3]
+        if examples:
+            print(f"  e.g. {examples}", file=sys.stderr)
+
     result = compute_genotype_counts(
         args.vcf,
         male_children,
@@ -149,41 +172,70 @@ def main(argv: list[str] | None = None) -> int:
         min_gq_nonpar=args.min_gq_nonpar,
         min_dp_nonpar=args.min_dp_nonpar,
         ab_threshold_nonpar=args.ab_threshold_nonpar,
+        strict=args.strict,
+        on_excluded=_report_excluded,
     )
 
-    n_male = len(male_children)
-    n_female = len(female_children)
+    n_male = result.male_cohort_size
+    n_female = result.female_cohort_size
+    if n_male or n_female:
+        print(f"Cohort: {n_male} male, {n_female} female", file=sys.stderr)
     output_target = resolve_output_target(
         args.output, args.output_dir, args.chromosome
     )
 
-    if is_chrx(args.chromosome):
-        paths = write_genotype_count_results(
-            result,
-            output_target,
-            male_children=n_male,
-            female_children=n_female,
-        )
-        for path in paths:
-            print(path, file=sys.stderr)
-        return 0
+    paths = write_genotype_count_results(
+        result,
+        output_target,
+        male_children=n_male,
+        female_children=n_female,
+    )
 
-    if output_target is not None:
-        write_genotype_count_results(
-            result,
-            output_target,
-            male_children=n_male,
-            female_children=n_female,
-        )
-    else:
-        print(
-            result_to_json(
-                result,
-                male_children=n_male,
-                female_children=n_female,
-            ),
-            end="",
-        )
+    params = {
+        "version": __version__,
+        "command": sys.argv,
+        "inputs": {
+            "vcf": args.vcf,
+            "metadata": args.metadata,
+        },
+        "chromosome": args.chromosome,
+        "metadata_columns": {
+            "patient_col": args.patient_col,
+            "father_col": args.father_col,
+            "mother_col": args.mother_col,
+            "sex_col": args.sex_col,
+            "metadata_sep": args.metadata_sep,
+        },
+        "allele_frequency": {
+            "gnomad_af_dir": args.gnomad_af_dir,
+            "allele_freqs": args.allele_freqs,
+            "af_key_col": args.af_key_col,
+            "common_freq_cutoff": args.common_freq_cutoff,
+        },
+        "filters": {
+            "min_gq": args.min_gq,
+            "min_dp": args.min_dp,
+            "ab_threshold": args.ab_threshold,
+            "min_gq_nonpar": args.min_gq_nonpar,
+            "min_dp_nonpar": args.min_dp_nonpar,
+            "ab_threshold_nonpar": args.ab_threshold_nonpar,
+            "strict": args.strict,
+        },
+        "cohort": {
+            "metadata_male": len(male_children),
+            "metadata_female": len(female_children),
+            "male_children": n_male,
+            "female_children": n_female,
+            "excluded_male": list(result.excluded_male),
+            "excluded_female": list(result.excluded_female),
+        },
+        "output_files": [str(p) for p in paths],
+    }
+    params_path = write_run_params(output_target, args.chromosome, params)
+    paths.append(params_path)
+
+    for path in paths:
+        print(path, file=sys.stderr)
     return 0
 
 

@@ -8,6 +8,11 @@ from pathlib import Path
 
 from sexxy.chrx import CHRX_REGION_ORDER, is_chrx
 
+MALE_OUTPUT_KEYS = ("chromosome", "sex", "male_children", "gt_counts")
+FEMALE_OUTPUT_KEYS = ("chromosome", "sex", "female_children", "gt_counts")
+CHRX_MALE_OUTPUT_KEYS = ("chromosome", "region", "sex", "male_children", "gt_counts")
+CHRX_FEMALE_OUTPUT_KEYS = ("chromosome", "region", "sex", "female_children", "gt_counts")
+
 
 @dataclass(frozen=True)
 class GenotypeCountResult:
@@ -17,6 +22,10 @@ class GenotypeCountResult:
     regions: tuple[str, ...]
     male: dict[str, dict[str, int]]
     female: dict[str, dict[str, int]]
+    male_cohort_size: int
+    female_cohort_size: int
+    excluded_male: tuple[str, ...] = ()
+    excluded_female: tuple[str, ...] = ()
 
     def male_counts(self, region: str | None = None) -> dict[str, int]:
         return self._counts(self.male, region)
@@ -67,13 +76,45 @@ def output_prefix(path: str | Path | None, chromosome: str) -> str:
     return str(p)
 
 
-def single_output_path(output: str | Path | None, chromosome: str) -> Path:
-    if output is None:
-        return Path(f"counts.{chromosome}.json")
-    p = Path(output)
-    if p.suffix == ".json":
-        return p
-    return p.with_suffix(".json")
+def _sex_payload(
+    result: GenotypeCountResult,
+    sex: str,
+    *,
+    male_children: int,
+    female_children: int,
+    region: str | None = None,
+) -> dict:
+    if region is not None:
+        counts = result.male_counts(region) if sex == "male" else result.female_counts(region)
+    else:
+        counts = result.male_counts() if sex == "male" else result.female_counts()
+
+    payload: dict = {
+        "chromosome": result.chromosome,
+        "sex": sex,
+        "gt_counts": counts,
+    }
+    if region is not None:
+        payload["region"] = region
+    if sex == "male":
+        payload["male_children"] = male_children
+    else:
+        payload["female_children"] = female_children
+    return payload
+
+
+def _write_sex_file(
+    written: list[Path],
+    prefix: str,
+    sex: str,
+    payload: dict,
+    *,
+    suffix: str = ".json",
+) -> None:
+    path = Path(f"{prefix}.{sex}{suffix}")
+    _ensure_parent_dir(path)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    written.append(path)
 
 
 def write_genotype_count_results(
@@ -83,59 +124,98 @@ def write_genotype_count_results(
     male_children: int,
     female_children: int,
 ) -> list[Path]:
-    """Write result JSON file(s). Returns paths written."""
+    """Write result JSON file(s). Returns paths written.
+
+    Autosomes and chrY: ``{prefix}.male.json`` and ``{prefix}.female.json``.
+
+    chrX: six files ``{prefix}.{sex}.{region}.json`` for ``Par1``, ``noPar``,
+    and ``Par2``. Each file lists only the cohort count for that sex; there is
+    no ``region`` field on autosomes/chrY.
+    """
     written: list[Path] = []
+    prefix = output_prefix(output, result.chromosome)
 
     if is_chrx(result.chromosome):
-        prefix = output_prefix(output, result.chromosome)
         for region in CHRX_REGION_ORDER:
-            for sex, counts, n_children in (
-                ("male", result.male[region], male_children),
-                ("female", result.female[region], female_children),
-            ):
+            for sex in ("male", "female"):
                 path = Path(f"{prefix}.{sex}.{region}.json")
                 _ensure_parent_dir(path)
-                payload = {
-                    "chromosome": result.chromosome,
-                    "region": region,
-                    "sex": sex,
-                    "children": n_children,
-                    "gt_counts": counts,
-                }
+                payload = _sex_payload(
+                    result,
+                    sex,
+                    male_children=male_children,
+                    female_children=female_children,
+                    region=region,
+                )
                 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
                 written.append(path)
         return written
 
-    path = single_output_path(output, result.chromosome)
-    _ensure_parent_dir(path)
-    payload = {
-        "chromosome": result.chromosome,
-        "male_children": male_children,
-        "female_children": female_children,
-        "male_gt_counts": result.male_counts(),
-        "female_gt_counts": result.female_counts(),
-    }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    written.append(path)
+    for sex in ("male", "female"):
+        payload = _sex_payload(
+            result,
+            sex,
+            male_children=male_children,
+            female_children=female_children,
+        )
+        _write_sex_file(written, prefix, sex, payload)
+
     return written
 
 
 def result_to_json(result: GenotypeCountResult, *, male_children: int, female_children: int) -> str:
-    """Serialize a non-chrX result, or full chrX result, as JSON text."""
+    """Serialize male and female payloads as one JSON object (for stdout)."""
     if is_chrx(result.chromosome):
         payload = {
             "chromosome": result.chromosome,
-            "male_children": male_children,
-            "female_children": female_children,
-            "male_gt_counts": result.male,
-            "female_gt_counts": result.female,
+            "regions": {
+                region: {
+                    "male": _sex_payload(
+                        result, "male",
+                        male_children=male_children,
+                        female_children=female_children,
+                        region=region,
+                    ),
+                    "female": _sex_payload(
+                        result, "female",
+                        male_children=male_children,
+                        female_children=female_children,
+                        region=region,
+                    ),
+                }
+                for region in CHRX_REGION_ORDER
+            },
         }
     else:
         payload = {
             "chromosome": result.chromosome,
-            "male_children": male_children,
-            "female_children": female_children,
-            "male_gt_counts": result.male_counts(),
-            "female_gt_counts": result.female_counts(),
+            "male": _sex_payload(
+                result, "male",
+                male_children=male_children,
+                female_children=female_children,
+            ),
+            "female": _sex_payload(
+                result, "female",
+                male_children=male_children,
+                female_children=female_children,
+            ),
         }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def write_run_params(
+    output: str | Path | None,
+    chromosome: str,
+    params: dict,
+) -> Path:
+    """Write run parameters to ``{prefix}.params.json`` and return the path."""
+    prefix = output_prefix(output, chromosome)
+    path = Path(f"{prefix}.params.json")
+    _ensure_parent_dir(path)
+    payload = dict(params)
+    payload["params_file"] = str(path)
+    output_files = list(payload.get("output_files", []))
+    output_files.append(str(path))
+    payload["output_files"] = output_files
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path

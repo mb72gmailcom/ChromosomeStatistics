@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from sexxy.table import read_table
@@ -98,6 +99,53 @@ def load_children_by_sex(
             female_children.append(row[patient_col])
 
     return male_children, female_children, children_rows
+
+
+@dataclass(frozen=True)
+class VcfCohortFilterResult:
+    """Male/female cohorts restricted to samples present in a VCF header."""
+
+    male_children: list[str]
+    female_children: list[str]
+    excluded_male: tuple[str, ...]
+    excluded_female: tuple[str, ...]
+
+
+def filter_children_to_vcf(
+    vcf_samples: Sequence[str],
+    male_children: Sequence[str],
+    female_children: Sequence[str],
+    *,
+    strict: bool = False,
+) -> VcfCohortFilterResult:
+    """Keep only children whose IDs appear in *vcf_samples*.
+
+    By default, missing IDs are excluded from the returned cohorts. With
+    *strict* ``True``, raise ``ValueError`` if any child is absent from the
+    VCF header (legacy fail-fast behavior).
+    """
+    vcf_set = set(vcf_samples)
+
+    def _split(ids: Sequence[str]) -> tuple[list[str], tuple[str, ...]]:
+        present = [sid for sid in ids if sid in vcf_set]
+        missing = tuple(sid for sid in ids if sid not in vcf_set)
+        return present, missing
+
+    male_present, excluded_male = _split(male_children)
+    female_present, excluded_female = _split(female_children)
+
+    if strict and (excluded_male or excluded_female):
+        all_missing = list(excluded_male) + list(excluded_female)
+        raise ValueError(
+            f"{len(all_missing)} sample(s) not found in VCF header, e.g. {all_missing[:5]}"
+        )
+
+    return VcfCohortFilterResult(
+        male_children=male_present,
+        female_children=female_present,
+        excluded_male=excluded_male,
+        excluded_female=excluded_female,
+    )
 
 
 def sample_column_indices(

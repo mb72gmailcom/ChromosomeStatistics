@@ -5,11 +5,11 @@ from __future__ import annotations
 import gzip
 from collections import Counter
 from pathlib import Path
-from typing import IO, Mapping
+from typing import Callable, IO, Mapping
 
 from sexxy.chrx import CHRX_REGION_ORDER, chrx_region, is_chrx
 from sexxy.gnomad import GnomadAfStore
-from sexxy.metadata import sample_column_indices
+from sexxy.metadata import filter_children_to_vcf, sample_column_indices
 from sexxy.results import GenotypeCountResult
 
 
@@ -144,6 +144,7 @@ def _count_if_passes(
 
 def _region_filter_kwargs(
     region: str,
+    sex: str,
     *,
     min_gq: float | None,
     min_dp: int | None,
@@ -152,7 +153,7 @@ def _region_filter_kwargs(
     min_dp_nonpar: int | None,
     ab_threshold_nonpar: float | None,
 ) -> dict[str, float | int | None]:
-    if region == "noPar":
+    if sex == "male" and region == "noPar":
         return {
             "min_gq": min_gq if min_gq_nonpar is None else min_gq_nonpar,
             "min_dp": min_dp if min_dp_nonpar is None else min_dp_nonpar,
@@ -203,6 +204,8 @@ def compute_genotype_counts(
     min_gq_nonpar: float | None = None,
     min_dp_nonpar: int | None = None,
     ab_threshold_nonpar: float | None = None,
+    strict: bool = False,
+    on_excluded: Callable[[list[str], list[str]], None] | None = None,
 ) -> GenotypeCountResult:
     """Scan *vcf_path* once and count genotypes for male and female children.
 
@@ -210,8 +213,8 @@ def compute_genotype_counts(
     *chromosome* are included (``chr1`` and ``1`` are treated as equivalent).
     All input files are expected to be chromosome-specific.
 
-    For chrX, counts are accumulated separately in three regions: ``par1``,
-    ``noPar``, and ``par2``. Other chromosomes use a single ``all`` region.
+    For chrX, counts are accumulated separately in three regions: ``Par1``,
+    ``noPar``, and ``Par2``. Other chromosomes use a single ``all`` region.
 
     Only SNVs are included. Variants with frequency above *common_freq_cutoff*
     are skipped when *allele_freqs* or *gnomad_af* is provided.
@@ -232,8 +235,15 @@ def compute_genotype_counts(
         Require ``AB > ab_threshold``. ``AB`` is read from the sample field
         when present, otherwise computed from ``AD``.
     *min_gq_nonpar*, *min_dp_nonpar*, *ab_threshold_nonpar*
-        Optional overrides used only for the chrX ``noPar`` region. Each
-        defaults to the corresponding global filter when unset.
+        Optional overrides used only for **male** calls in the chrX ``noPar``
+        region. Each defaults to the corresponding global filter when unset.
+        Female calls always use the global filters in all chrX regions.
+    *strict*
+        When ``True``, require every metadata child to appear in the VCF
+        header; otherwise exclude children not present in the VCF.
+    *on_excluded*
+        Optional callback ``(excluded_male, excluded_female)`` invoked when
+        children are dropped because they are absent from the VCF header.
 
     Returns a :class:`~sexxy.results.GenotypeCountResult`.
     """
@@ -249,6 +259,18 @@ def compute_genotype_counts(
         gnomad_store = GnomadAfStore(gnomad_af)
 
     samples = read_vcf_samples(vcf_path)
+    cohort = filter_children_to_vcf(
+        samples, male_children, female_children, strict=strict
+    )
+    if not cohort.male_children and not cohort.female_children:
+        raise ValueError(
+            "no male or female children from metadata are present in the VCF header"
+        )
+    if on_excluded is not None and (cohort.excluded_male or cohort.excluded_female):
+        on_excluded(list(cohort.excluded_male), list(cohort.excluded_female))
+    male_children = cohort.male_children
+    female_children = cohort.female_children
+
     male_ind = sample_column_indices(samples, male_children) if male_children else []
     female_ind = sample_column_indices(samples, female_children) if female_children else []
 
@@ -298,8 +320,19 @@ def compute_genotype_counts(
             fields = line.rstrip("\n").split("\t")
             format_str = fields[8]
             dd = fields[9:]
-            filter_kw = _region_filter_kwargs(
+            male_filter_kw = _region_filter_kwargs(
                 region,
+                "male",
+                min_gq=min_gq,
+                min_dp=min_dp,
+                ab_threshold=ab_threshold,
+                min_gq_nonpar=min_gq_nonpar,
+                min_dp_nonpar=min_dp_nonpar,
+                ab_threshold_nonpar=ab_threshold_nonpar,
+            )
+            female_filter_kw = _region_filter_kwargs(
+                region,
+                "female",
                 min_gq=min_gq,
                 min_dp=min_dp,
                 ab_threshold=ab_threshold,
@@ -308,13 +341,17 @@ def compute_genotype_counts(
                 ab_threshold_nonpar=ab_threshold_nonpar,
             )
             for ci in male_ind:
-                _count_if_passes(dd[ci], format_str, dgt_m[region], **filter_kw)
+                _count_if_passes(dd[ci], format_str, dgt_m[region], **male_filter_kw)
             for ci in female_ind:
-                _count_if_passes(dd[ci], format_str, dgt_f[region], **filter_kw)
+                _count_if_passes(dd[ci], format_str, dgt_f[region], **female_filter_kw)
 
     return GenotypeCountResult(
         chromosome=chromosome,
         regions=regions,
         male={r: dict(dgt_m[r]) for r in regions},
         female={r: dict(dgt_f[r]) for r in regions},
+        male_cohort_size=len(male_children),
+        female_cohort_size=len(female_children),
+        excluded_male=cohort.excluded_male,
+        excluded_female=cohort.excluded_female,
     )

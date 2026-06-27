@@ -16,6 +16,8 @@ from sexxy.results import (
 )
 from sexxy.vcf import (
     _allele_balance,
+    _allele_balance_from_parts,
+    _field_indices,
     _passes_genotype_filters,
     _parse_sample_fields,
     chrom_matches,
@@ -231,8 +233,9 @@ def test_min_gq_filter(filtered_vcf_path: Path, metadata_path: Path):
     result = compute_genotype_counts(
         filtered_vcf_path, male, female, chromosome="chr1", min_gq=60
     )
-    assert result.male_counts() == {"1/1": 1, "0/1": 1}
-    assert result.female_counts() == {"0/0": 1}
+    # c2 0/1 at rs1 has GQ 50 and is dropped
+    assert result.male_counts() == {"0/0": 1, "1/1": 1, "0/1": 1}
+    assert result.female_counts() == {"0/1": 1, "0/0": 1}
 
 
 def test_ab_threshold_filter(filtered_vcf_path: Path, metadata_path: Path):
@@ -248,11 +251,15 @@ def test_ab_threshold_filter(filtered_vcf_path: Path, metadata_path: Path):
 def test_allele_balance_from_ad():
     fields = _parse_sample_fields("GT:DP:AD", "0/1:30:12,18")
     assert _allele_balance(fields) == pytest.approx(0.6)
+    indices = _field_indices("GT:DP:AD")
+    assert _allele_balance_from_parts("0/1:30:12,18".split(":"), indices) == pytest.approx(0.6)
 
 
 def test_allele_balance_haploid_ad():
     fields = _parse_sample_fields("GT:DP:AD", "1:30:25")
     assert _allele_balance(fields) == 1.0
+    indices = _field_indices("GT:DP:AD")
+    assert _allele_balance_from_parts("1:30:25".split(":"), indices) == 1.0
 
 
 def test_passes_genotype_filters_ab_only_on_het_hom_alt():

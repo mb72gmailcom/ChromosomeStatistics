@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, IO, Mapping
 
@@ -142,7 +143,186 @@ def _count_if_passes(
     counts[fields.get("GT", ".").split(":")[0]] += 1
 
 
-def _region_filter_kwargs(
+@dataclass(frozen=True)
+class _FieldIndices:
+    """Colon-field indices for FORMAT tags (GT is always index 0)."""
+
+    gq: int | None
+    dp: int | None
+    ad: int | None
+    ab: int | None
+
+
+@dataclass(frozen=True)
+class _FilterSettings:
+    min_gq: float | None
+    min_dp: int | None
+    ab_threshold: float | None
+
+    @property
+    def count_mode(self) -> str:
+        if self.min_gq is None and self.min_dp is None and self.ab_threshold is None:
+            return "gt_only"
+        if self.ab_threshold is not None:
+            return "gq_dp_ab"
+        return "gq_dp"
+
+
+def _field_indices(format_str: str) -> _FieldIndices:
+    keys = format_str.split(":")
+    idx = {k: i for i, k in enumerate(keys)}
+    return _FieldIndices(
+        gq=idx.get("GQ"),
+        dp=idx.get("DP"),
+        ad=idx.get("AD"),
+        ab=idx.get("AB"),
+    )
+
+
+def _allele_balance_from_parts(parts: list[str], indices: _FieldIndices) -> float | None:
+    if indices.ab is not None and indices.ab < len(parts):
+        ab = parts[indices.ab]
+        if ab not in (".", ""):
+            try:
+                return float(ab)
+            except ValueError:
+                pass
+
+    if indices.ad is None or indices.ad >= len(parts):
+        return None
+    ad = parts[indices.ad]
+    if ad in (".", ""):
+        return None
+    ad_parts = ad.split(",")
+    if len(ad_parts) == 1:
+        try:
+            int(ad_parts[0])
+        except ValueError:
+            return None
+        return 1.0
+    if len(ad_parts) < 2:
+        return None
+    try:
+        ref, alt = int(ad_parts[0]), int(ad_parts[1])
+    except ValueError:
+        return None
+    total = ref + alt
+    if total == 0:
+        return None
+    return alt / total
+
+
+def _passes_gq_dp(
+    parts: list[str],
+    indices: _FieldIndices,
+    *,
+    min_gq: float | None,
+    min_dp: int | None,
+) -> bool:
+    gt = _unphased_gt(parts[0] if parts else ".")
+    if gt in (".", "./."):
+        return False
+
+    if min_gq is not None:
+        if indices.gq is None or indices.gq >= len(parts):
+            return False
+        gq = parts[indices.gq]
+        if gq in (".", ""):
+            return False
+        try:
+            if float(gq) < min_gq:
+                return False
+        except ValueError:
+            return False
+
+    if min_dp is not None:
+        if indices.dp is None or indices.dp >= len(parts):
+            return False
+        dp = parts[indices.dp]
+        if dp in (".", ""):
+            return False
+        try:
+            if int(float(dp)) < min_dp:
+                return False
+        except ValueError:
+            return False
+
+    return True
+
+
+def _passes_gq_dp_ab(
+    parts: list[str],
+    indices: _FieldIndices,
+    settings: _FilterSettings,
+) -> bool:
+    gt = _unphased_gt(parts[0] if parts else ".")
+    if gt in (".", "./."):
+        return False
+
+    if not _passes_gq_dp(parts, indices, min_gq=settings.min_gq, min_dp=settings.min_dp):
+        return False
+
+    if settings.ab_threshold is not None and gt in ("0/1", "1/1"):
+        ab = _allele_balance_from_parts(parts, indices)
+        if ab is None or ab <= settings.ab_threshold:
+            return False
+
+    return True
+
+
+def _count_gt_only(dd: list[str], sample_indices: list[int], counts: Counter[str]) -> None:
+    for ci in sample_indices:
+        counts[dd[ci].split(":", 1)[0]] += 1
+
+
+def _count_gq_dp(
+    dd: list[str],
+    sample_indices: list[int],
+    counts: Counter[str],
+    indices: _FieldIndices,
+    settings: _FilterSettings,
+) -> None:
+    min_gq, min_dp = settings.min_gq, settings.min_dp
+    for ci in sample_indices:
+        parts = dd[ci].split(":")
+        if not _passes_gq_dp(parts, indices, min_gq=min_gq, min_dp=min_dp):
+            continue
+        counts[parts[0]] += 1
+
+
+def _count_gq_dp_ab(
+    dd: list[str],
+    sample_indices: list[int],
+    counts: Counter[str],
+    indices: _FieldIndices,
+    settings: _FilterSettings,
+) -> None:
+    for ci in sample_indices:
+        parts = dd[ci].split(":")
+        if not _passes_gq_dp_ab(parts, indices, settings):
+            continue
+        counts[parts[0]] += 1
+
+
+def _count_samples(
+    dd: list[str],
+    sample_indices: list[int],
+    counts: Counter[str],
+    settings: _FilterSettings,
+    indices: _FieldIndices | None,
+) -> None:
+    mode = settings.count_mode
+    if mode == "gt_only":
+        _count_gt_only(dd, sample_indices, counts)
+    elif mode == "gq_dp":
+        assert indices is not None
+        _count_gq_dp(dd, sample_indices, counts, indices, settings)
+    else:
+        assert indices is not None
+        _count_gq_dp_ab(dd, sample_indices, counts, indices, settings)
+
+
+def _region_filter_settings(
     region: str,
     sex: str,
     *,
@@ -152,18 +332,18 @@ def _region_filter_kwargs(
     min_gq_nonpar: float | None,
     min_dp_nonpar: int | None,
     ab_threshold_nonpar: float | None,
-) -> dict[str, float | int | None]:
+) -> _FilterSettings:
     if sex == "male" and region == "noPar":
-        return {
-            "min_gq": min_gq if min_gq_nonpar is None else min_gq_nonpar,
-            "min_dp": min_dp if min_dp_nonpar is None else min_dp_nonpar,
-            "ab_threshold": ab_threshold if ab_threshold_nonpar is None else ab_threshold_nonpar,
-        }
-    return {
-        "min_gq": min_gq,
-        "min_dp": min_dp,
-        "ab_threshold": ab_threshold,
-    }
+        return _FilterSettings(
+            min_gq=min_gq if min_gq_nonpar is None else min_gq_nonpar,
+            min_dp=min_dp if min_dp_nonpar is None else min_dp_nonpar,
+            ab_threshold=ab_threshold if ab_threshold_nonpar is None else ab_threshold_nonpar,
+        )
+    return _FilterSettings(
+        min_gq=min_gq,
+        min_dp=min_dp,
+        ab_threshold=ab_threshold,
+    )
 
 
 def is_snv(ref: str, alt: str) -> bool:
@@ -218,6 +398,10 @@ def compute_genotype_counts(
 
     Only SNVs are included. Variants with frequency above *common_freq_cutoff*
     are skipped when *allele_freqs* or *gnomad_af* is provided.
+
+    Sample FORMAT fields are assumed to list ``GT`` first. When quality filters
+    are enabled, ``GQ``, ``DP``, and ``AD``/``AB`` are read by index from the
+    FORMAT column.
 
     *allele_freqs* is a static variant-id -> AF map for this chromosome.
     *gnomad_af* is a base directory (or :class:`~sexxy.gnomad.GnomadAfStore`);
@@ -283,23 +467,51 @@ def compute_genotype_counts(
         dgt_m = {"all": Counter()}
         dgt_f = {"all": Counter()}
 
+    filter_kw = {
+        "min_gq": min_gq,
+        "min_dp": min_dp,
+        "ab_threshold": ab_threshold,
+        "min_gq_nonpar": min_gq_nonpar,
+        "min_dp_nonpar": min_dp_nonpar,
+        "ab_threshold_nonpar": ab_threshold_nonpar,
+    }
+    male_settings = {
+        r: _region_filter_settings(r, "male", **filter_kw) for r in regions
+    }
+    female_settings = {
+        r: _region_filter_settings(r, "female", **filter_kw) for r in regions
+    }
+    need_field_indices = any(
+        male_settings[r].count_mode != "gt_only"
+        or female_settings[r].count_mode != "gt_only"
+        for r in regions
+    )
+
     chrom_af: Mapping[str, float] | None = None
     if gnomad_store is not None:
         chrom_af = gnomad_store.for_chromosome(chromosome)
+
+    target_chrom_key = _chrom_key(chromosome)
+    scan_chrx = is_chrx(chromosome)
+    use_variant_af_key = allele_freqs is not None and af_key_col == "variant"
+    field_indices: _FieldIndices | None = None
 
     with _open_vcf(vcf_path) as f:
         for line in f:
             if line.startswith("#"):
                 continue
 
-            chrom, pos, vid, ref, alt = get_n_fields(line, 5)
-            if not chrom_matches(chrom, chromosome):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 10:
                 continue
-            # SNVs only: len(ref) == 1 and len(alt) == 1
+
+            chrom, pos, vid, ref, alt = parts[0], parts[1], parts[2], parts[3], parts[4]
+            if _chrom_key(chrom) != target_chrom_key:
+                continue
             if not is_snv(ref, alt):
                 continue
 
-            if is_chrx(chromosome):
+            if scan_chrx:
                 region = chrx_region(int(pos))
                 if region is None:
                     continue
@@ -310,40 +522,18 @@ def compute_genotype_counts(
                 if float(chrom_af.get(vid, 0)) > common_freq_cutoff:
                     continue
             elif allele_freqs is not None:
-                if af_key_col == "variant":
-                    key = f"{chrom}:{pos}:{ref}:{alt}"
-                else:
-                    key = vid
+                key = f"{chrom}:{pos}:{ref}:{alt}" if use_variant_af_key else vid
                 if float(allele_freqs.get(key, 0)) > common_freq_cutoff:
                     continue
 
-            fields = line.rstrip("\n").split("\t")
-            format_str = fields[8]
-            dd = fields[9:]
-            male_filter_kw = _region_filter_kwargs(
-                region,
-                "male",
-                min_gq=min_gq,
-                min_dp=min_dp,
-                ab_threshold=ab_threshold,
-                min_gq_nonpar=min_gq_nonpar,
-                min_dp_nonpar=min_dp_nonpar,
-                ab_threshold_nonpar=ab_threshold_nonpar,
-            )
-            female_filter_kw = _region_filter_kwargs(
-                region,
-                "female",
-                min_gq=min_gq,
-                min_dp=min_dp,
-                ab_threshold=ab_threshold,
-                min_gq_nonpar=min_gq_nonpar,
-                min_dp_nonpar=min_dp_nonpar,
-                ab_threshold_nonpar=ab_threshold_nonpar,
-            )
-            for ci in male_ind:
-                _count_if_passes(dd[ci], format_str, dgt_m[region], **male_filter_kw)
-            for ci in female_ind:
-                _count_if_passes(dd[ci], format_str, dgt_f[region], **female_filter_kw)
+            if need_field_indices and field_indices is None:
+                field_indices = _field_indices(parts[8])
+
+            dd = parts[9:]
+            if male_ind:
+                _count_samples(dd, male_ind, dgt_m[region], male_settings[region], field_indices)
+            if female_ind:
+                _count_samples(dd, female_ind, dgt_f[region], female_settings[region], field_indices)
 
     return GenotypeCountResult(
         chromosome=chromosome,

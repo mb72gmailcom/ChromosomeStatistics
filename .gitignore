@@ -1,2 +1,13 @@
-*/--pycache__/*
-*/--init__.py
+__pycache__/*
+PanGPA.log
+PanGPA.log.old
+src/sexxy/__pycache__/__init__.cpython-313.pyc
+src/sexxy/__pycache__/chrx.cpython-313.pyc
+src/sexxy/__pycache__/cli.cpython-313.pyc
+src/sexxy/__pycache__/gnomad.cpython-313.pyc
+src/sexxy/__pycache__/intervals.cpython-313.pyc
+src/sexxy/__pycache__/metadata.cpython-313.pyc
+src/sexxy/__pycache__/results.cpython-313.pyc
+src/sexxy/__pycache__/table.cpython-313.pyc
+src/sexxy/__pycache__/vcf.cpython-313.pyc
+

@@ -170,7 +170,7 @@ From an installed package:
 ```bash
 sexxy cohort.chr1.vcf.gz metadata.tsv --chromosome chr1 --output-dir results/
 # -> results/counts.chr1.male.json, results/counts.chr1.female.json,
-#    results/counts.chr1.params.json
+#    results/counts.chr1.skipped_contigs.json, results/counts.chr1.params.json
 ```
 
 The **params file** records inputs, filters, cohort sizes (including any children
@@ -238,6 +238,24 @@ Set any of these parameters to enable per-call filtering (unset = no filter):
 | `ab_threshold` | `AB` or `AD` | for `0/1` and `1/1`: require `AB > ab_threshold` |
 
 `0/0` calls are not subject to the AB filter. When `AB` is absent, it is computed as `alt / (ref + alt)` from `AD`.
+
+### Repeat-region exclusion
+
+Pass `--exclude-repeats` with a tab-separated file of semi-open intervals
+``chrom  start  end`` (skip when ``start <= POS < end``):
+
+```text
+chrY    0       2781790
+chrY    2782979 2783283
+```
+
+Intervals must be sorted by `start`. Only rows matching `--chromosome` are
+used. Skipped variant counts appear in `params.json` as `excluded_repeat_rows`.
+
+```bash
+sexxy cohort.chrY.vcf.gz metadata.tsv --chromosome chrY \
+  --exclude-repeats chrY.repeats.tsv --output-dir results/chrY
+```
 
 For chrX `noPar` **male** calls, you can override the cutoffs with `min_gq_nonpar`,
 `min_dp_nonpar`, and `ab_threshold_nonpar` (each defaults to the global value when unset).

@@ -12,9 +12,10 @@ from sexxy.results import (
     resolve_output_target,
     write_genotype_count_results,
     write_run_params,
+    write_skipped_contigs,
 )
 from sexxy.table import read_table
-from sexxy.vcf import compute_genotype_counts
+from sexxy.vcf import _chrom_key, compute_genotype_counts
 
 
 def _load_allele_freqs(path: str, key_col: str) -> dict[str, float]:
@@ -120,6 +121,14 @@ def main(argv: list[str] | None = None) -> int:
         help="chrX noPar AB cutoff for males only (default: --ab-threshold)",
     )
     parser.add_argument(
+        "--exclude-repeats",
+        default=None,
+        help=(
+            "Tab-separated file of chrom/start/end intervals; skip variants "
+            "with start <= POS < end (semi-open)"
+        ),
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help=(
@@ -172,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         min_gq_nonpar=args.min_gq_nonpar,
         min_dp_nonpar=args.min_dp_nonpar,
         ab_threshold_nonpar=args.ab_threshold_nonpar,
+        exclude_repeats=args.exclude_repeats,
         strict=args.strict,
         on_excluded=_report_excluded,
     )
@@ -180,6 +190,12 @@ def main(argv: list[str] | None = None) -> int:
     n_female = result.female_cohort_size
     if n_male or n_female:
         print(f"Cohort: {n_male} male, {n_female} female", file=sys.stderr)
+    if result.excluded_repeat_rows:
+        print(
+            f"Excluded {result.excluded_repeat_rows} variant rows in "
+            f"{result.exclude_repeat_intervals} repeat interval(s)",
+            file=sys.stderr,
+        )
     output_target = resolve_output_target(
         args.output, args.output_dir, args.chromosome
     )
@@ -190,6 +206,22 @@ def main(argv: list[str] | None = None) -> int:
         male_children=n_male,
         female_children=n_female,
     )
+
+    skipped_path = write_skipped_contigs(
+        output_target,
+        args.chromosome,
+        vcf=args.vcf,
+        target_chrom_key=_chrom_key(args.chromosome),
+        skipped_contigs=result.skipped_contigs,
+    )
+    paths.append(skipped_path)
+    total_skipped = sum(result.skipped_contigs.values())
+    if total_skipped:
+        n_contigs = len(result.skipped_contigs)
+        print(
+            f"Skipped {total_skipped} variant rows on {n_contigs} non-matching contig(s)",
+            file=sys.stderr,
+        )
 
     params = {
         "version": __version__,
@@ -220,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             "min_dp_nonpar": args.min_dp_nonpar,
             "ab_threshold_nonpar": args.ab_threshold_nonpar,
             "strict": args.strict,
+            "exclude_repeats": args.exclude_repeats,
         },
         "cohort": {
             "metadata_male": len(male_children),
@@ -229,6 +262,10 @@ def main(argv: list[str] | None = None) -> int:
             "excluded_male": list(result.excluded_male),
             "excluded_female": list(result.excluded_female),
         },
+        "skipped_contigs_file": str(skipped_path),
+        "total_skipped_rows": total_skipped,
+        "exclude_repeat_intervals": result.exclude_repeat_intervals,
+        "excluded_repeat_rows": result.excluded_repeat_rows,
         "output_files": [str(p) for p in paths],
     }
     params_path = write_run_params(output_target, args.chromosome, params)

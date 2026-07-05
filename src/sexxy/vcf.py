@@ -10,6 +10,7 @@ from typing import Callable, IO, Mapping
 
 from sexxy.chrx import CHRX_REGION_ORDER, chrx_region, is_chrx
 from sexxy.gnomad import GnomadAfStore
+from sexxy.intervals import ExcludeIntervals, load_exclude_intervals
 from sexxy.metadata import filter_children_to_vcf, sample_column_indices
 from sexxy.results import GenotypeCountResult
 
@@ -384,6 +385,7 @@ def compute_genotype_counts(
     min_gq_nonpar: float | None = None,
     min_dp_nonpar: int | None = None,
     ab_threshold_nonpar: float | None = None,
+    exclude_repeats: str | Path | ExcludeIntervals | None = None,
     strict: bool = False,
     on_excluded: Callable[[list[str], list[str]], None] | None = None,
 ) -> GenotypeCountResult:
@@ -422,6 +424,10 @@ def compute_genotype_counts(
         Optional overrides used only for **male** calls in the chrX ``noPar``
         region. Each defaults to the corresponding global filter when unset.
         Female calls always use the global filters in all chrX regions.
+    *exclude_repeats*
+        Optional path to a tab-separated file of ``chrom start end`` intervals,
+        or a pre-loaded :class:`~sexxy.intervals.ExcludeIntervals`. Variants
+        with ``start <= POS < end`` are skipped.
     *strict*
         When ``True``, require every metadata child to appear in the VCF
         header; otherwise exclude children not present in the VCF.
@@ -433,6 +439,15 @@ def compute_genotype_counts(
     """
     if allele_freqs is not None and gnomad_af is not None:
         raise ValueError("pass only one of allele_freqs or gnomad_af")
+
+    repeat_filter: ExcludeIntervals | None
+    if exclude_repeats is None:
+        repeat_filter = None
+    elif isinstance(exclude_repeats, ExcludeIntervals):
+        repeat_filter = exclude_repeats
+    else:
+        repeat_filter = load_exclude_intervals(exclude_repeats, chromosome)
+    exclude_repeat_intervals = len(repeat_filter) if repeat_filter is not None else 0
 
     gnomad_store: GnomadAfStore | None
     if gnomad_af is None:
@@ -495,6 +510,8 @@ def compute_genotype_counts(
     scan_chrx = is_chrx(chromosome)
     use_variant_af_key = allele_freqs is not None and af_key_col == "variant"
     field_indices: _FieldIndices | None = None
+    skipped_contigs: Counter[str] = Counter()
+    excluded_repeat_rows = 0
 
     with _open_vcf(vcf_path) as f:
         for line in f:
@@ -507,12 +524,18 @@ def compute_genotype_counts(
 
             chrom, pos, vid, ref, alt = parts[0], parts[1], parts[2], parts[3], parts[4]
             if _chrom_key(chrom) != target_chrom_key:
+                skipped_contigs[chrom] += 1
                 continue
             if not is_snv(ref, alt):
                 continue
 
+            pos_i = int(pos)
+            if repeat_filter is not None and repeat_filter.contains(pos_i):
+                excluded_repeat_rows += 1
+                continue
+
             if scan_chrx:
-                region = chrx_region(int(pos))
+                region = chrx_region(pos_i)
                 if region is None:
                     continue
             else:
@@ -544,4 +567,7 @@ def compute_genotype_counts(
         female_cohort_size=len(female_children),
         excluded_male=cohort.excluded_male,
         excluded_female=cohort.excluded_female,
+        skipped_contigs=dict(skipped_contigs),
+        excluded_repeat_rows=excluded_repeat_rows,
+        exclude_repeat_intervals=exclude_repeat_intervals,
     )

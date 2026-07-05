@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 from sexxy.chrx import CHRX_REGION_ORDER, is_chrx
 
@@ -26,6 +27,9 @@ class GenotypeCountResult:
     female_cohort_size: int
     excluded_male: tuple[str, ...] = ()
     excluded_female: tuple[str, ...] = ()
+    skipped_contigs: dict[str, int] = field(default_factory=dict)
+    excluded_repeat_rows: int = 0
+    exclude_repeat_intervals: int = 0
 
     def male_counts(self, region: str | None = None) -> dict[str, int]:
         return self._counts(self.male, region)
@@ -217,5 +221,30 @@ def write_run_params(
     output_files = list(payload.get("output_files", []))
     output_files.append(str(path))
     payload["output_files"] = output_files
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def write_skipped_contigs(
+    output: str | Path | None,
+    chromosome: str,
+    *,
+    vcf: str | Path,
+    target_chrom_key: str,
+    skipped_contigs: Mapping[str, int],
+) -> Path:
+    """Write skipped non-matching contig stats to ``{prefix}.skipped_contigs.json``."""
+    prefix = output_prefix(output, chromosome)
+    path = Path(f"{prefix}.skipped_contigs.json")
+    _ensure_parent_dir(path)
+    total = sum(skipped_contigs.values())
+    payload = {
+        "chromosome": chromosome,
+        "skipped_contigs_file": str(path),
+        "target_chrom_key": target_chrom_key,
+        "total_skipped_rows": total,
+        "vcf": str(vcf),
+        "skipped_contigs": dict(skipped_contigs),
+    }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return path

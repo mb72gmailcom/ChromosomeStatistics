@@ -136,9 +136,17 @@ def main(argv: list[str] | None = None) -> int:
             "default is to exclude children not present in the VCF"
         ),
     )
+    parser.add_argument(
+        "--check-father",
+        action="store_true",
+        help=(
+            "chrY only: for male children, count how often 0/0, 0/1, and 1/1 "
+            "match the father's genotype (keys 0/0_f, 0/1_f, 1/1_f)"
+        ),
+    )
     args = parser.parse_args(argv)
 
-    male_children, female_children, _ = load_children_by_sex(
+    male_children, female_children, children_rows = load_children_by_sex(
         args.metadata,
         patient_col=args.patient_col,
         father_col=args.father_col,
@@ -146,6 +154,17 @@ def main(argv: list[str] | None = None) -> int:
         sex_col=args.sex_col,
         sep=args.metadata_sep,
     )
+
+    male_father_by_child = None
+    if args.check_father:
+        if _chrom_key(args.chromosome).upper() != "Y":
+            print("--check-father applies only to chrY; ignoring", file=sys.stderr)
+        else:
+            male_father_by_child = {
+                row[args.patient_col]: row[args.father_col]
+                for row in children_rows
+                if row[args.patient_col] in male_children
+            }
 
     allele_freqs = None
     gnomad_af = None
@@ -184,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         exclude_repeats=args.exclude_repeats,
         strict=args.strict,
         on_excluded=_report_excluded,
+        check_father=args.check_father,
+        male_father_by_child=male_father_by_child,
     )
 
     n_male = result.male_cohort_size
@@ -252,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             "min_dp_nonpar": args.min_dp_nonpar,
             "ab_threshold_nonpar": args.ab_threshold_nonpar,
             "strict": args.strict,
+            "check_father": args.check_father,
             "exclude_repeats": args.exclude_repeats,
         },
         "cohort": {

@@ -323,6 +323,47 @@ def _count_samples(
         _count_gq_dp_ab(dd, sample_indices, counts, indices, settings)
 
 
+_FATHER_MATCH_GTS = frozenset({"0/0", "0/1", "1/1"})
+
+
+def _child_gt_if_passes(
+    dd: list[str],
+    ci: int,
+    settings: _FilterSettings,
+    indices: _FieldIndices | None,
+) -> str | None:
+    parts = dd[ci].split(":")
+    mode = settings.count_mode
+    if mode == "gt_only":
+        return parts[0]
+    assert indices is not None
+    if mode == "gq_dp":
+        if not _passes_gq_dp(parts, indices, min_gq=settings.min_gq, min_dp=settings.min_dp):
+            return None
+    elif not _passes_gq_dp_ab(parts, indices, settings):
+        return None
+    return parts[0]
+
+
+def _count_samples_with_father_match(
+    dd: list[str],
+    child_father_pairs: list[tuple[int, int]],
+    counts: Counter[str],
+    settings: _FilterSettings,
+    indices: _FieldIndices | None,
+) -> None:
+    for child_ci, father_ci in child_father_pairs:
+        child_gt = _child_gt_if_passes(dd, child_ci, settings, indices)
+        if child_gt is None:
+            continue
+        counts[child_gt] += 1
+        child_gt_u = _unphased_gt(child_gt)
+        if child_gt_u in _FATHER_MATCH_GTS:
+            father_gt = _unphased_gt(dd[father_ci].split(":", 1)[0])
+            if father_gt == child_gt_u:
+                counts[f"{child_gt_u}_f"] += 1
+
+
 def _region_filter_settings(
     region: str,
     sex: str,
@@ -369,6 +410,25 @@ def chrom_matches(vcf_chrom: str, target_chrom: str) -> bool:
     return _chrom_key(vcf_chrom) == _chrom_key(target_chrom)
 
 
+def is_chry(chromosome: str) -> bool:
+    return _chrom_key(chromosome).upper() == "Y"
+
+
+def _male_child_father_pairs(
+    samples: list[str],
+    male_children: list[str],
+    male_father_by_child: Mapping[str, str],
+) -> list[tuple[int, int]]:
+    sample_index = {s: i for i, s in enumerate(samples)}
+    pairs: list[tuple[int, int]] = []
+    for child_id in male_children:
+        father_id = male_father_by_child.get(child_id)
+        if not father_id or father_id not in sample_index:
+            continue
+        pairs.append((sample_index[child_id], sample_index[father_id]))
+    return pairs
+
+
 def compute_genotype_counts(
     vcf_path: str | Path,
     male_children: list[str],
@@ -388,6 +448,8 @@ def compute_genotype_counts(
     exclude_repeats: str | Path | ExcludeIntervals | None = None,
     strict: bool = False,
     on_excluded: Callable[[list[str], list[str]], None] | None = None,
+    check_father: bool = False,
+    male_father_by_child: Mapping[str, str] | None = None,
 ) -> GenotypeCountResult:
     """Scan *vcf_path* once and count genotypes for male and female children.
 
@@ -434,6 +496,13 @@ def compute_genotype_counts(
     *on_excluded*
         Optional callback ``(excluded_male, excluded_female)`` invoked when
         children are dropped because they are absent from the VCF header.
+    *check_father*
+        When ``True`` on chrY, for each male child also count how often
+        ``0/0``, ``0/1``, and ``1/1`` match the father's genotype under
+        keys ``0/0_f``, ``0/1_f``, and ``1/1_f``.
+    *male_father_by_child*
+        Child sample ID to father sample ID map (required when
+        *check_father* is ``True``).
 
     Returns a :class:`~sexxy.results.GenotypeCountResult`.
     """
@@ -472,6 +541,18 @@ def compute_genotype_counts(
 
     male_ind = sample_column_indices(samples, male_children) if male_children else []
     female_ind = sample_column_indices(samples, female_children) if female_children else []
+
+    use_father_check = (
+        check_father
+        and is_chry(chromosome)
+        and male_father_by_child
+        and male_children
+    )
+    male_father_pairs = (
+        _male_child_father_pairs(samples, male_children, male_father_by_child)
+        if use_father_check
+        else []
+    )
 
     if is_chrx(chromosome):
         regions = CHRX_REGION_ORDER
@@ -553,7 +634,15 @@ def compute_genotype_counts(
                 field_indices = _field_indices(parts[8])
 
             dd = parts[9:]
-            if male_ind:
+            if male_father_pairs:
+                _count_samples_with_father_match(
+                    dd,
+                    male_father_pairs,
+                    dgt_m[region],
+                    male_settings[region],
+                    field_indices,
+                )
+            elif male_ind:
                 _count_samples(dd, male_ind, dgt_m[region], male_settings[region], field_indices)
             if female_ind:
                 _count_samples(dd, female_ind, dgt_f[region], female_settings[region], field_indices)

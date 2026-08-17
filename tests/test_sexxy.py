@@ -347,9 +347,25 @@ def test_include_multiallelic_expands_alleles(tmp_path: Path, metadata_path: Pat
     result = compute_genotype_counts(
         path, male, female, chromosome="chr1", include_multiallelic=True
     )
-    # allele G: c1 0/1 → 0/1, c2 0/2 → skip; allele T: c1 0/1 → skip, c2 0/2 → 0/1
     assert result.male_counts() == {"0/1": 1}
-    assert result.female_counts() == {"0/1": 1}
+    assert result.female_counts() == {"0/2": 1}
+
+
+def test_include_multiallelic_keeps_mixed_alt_genotypes(
+    tmp_path: Path, metadata_path: Path
+):
+    path = tmp_path / "mixed_gt.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tc1\tc2\n"
+        "chr1\t100\t.\tA\tG,T,C\t.\t.\t.\tGT:DP\t1/2:30\t0/3:25\n"
+    )
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    result = compute_genotype_counts(
+        path, male, female, chromosome="chr1", include_multiallelic=True
+    )
+    assert result.male_counts() == {"1/2": 1}
+    assert result.female_counts() == {"0/3": 1}
 
 
 def test_include_multiallelic_af_per_allele(tmp_path: Path, metadata_path: Path):
@@ -373,9 +389,9 @@ def test_include_multiallelic_af_per_allele(tmp_path: Path, metadata_path: Path)
         allele_freqs=af,
         common_freq_cutoff=0.01,
     )
-    # T skipped by AF; only G counted (male 0/1)
+    # T is common but G is rare, so the row is kept; original GTs are counted
     assert result.male_counts() == {"0/1": 1}
-    assert result.female_counts() == {}
+    assert result.female_counts() == {"0/2": 1}
     assert result.skipped_common_variants == 1
 
 

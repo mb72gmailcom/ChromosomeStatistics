@@ -214,15 +214,17 @@ sexxy cohort.chr1.vcf.gz metadata.tsv \
   --output-dir results/
 ```
 
-Use ``--include-multiallelic`` to expand comma-separated ``ALT`` fields and
-process each SNV allele separately (AF, genotype remapping, and AB use that
-allele). Without the flag, multi-allelic rows are skipped.
+Use ``--include-multiallelic`` to include comma-separated ``ALT`` rows and
+count original unphased genotypes (``0/2``, ``1/2``, ``4/5``, …). Without the
+flag, multi-allelic rows are skipped. Genotypes are never remapped into
+``0/1`` / ``1/1``. A multi-allelic row is kept if at least one SNV ALT is
+below the AF cutoff.
 
 ## Behavior
 
 - **SNVs only**: alleles where `len(REF) == 1` and `len(ALT allele) == 1`
-- **Multi-allelic**: skipped by default; with `--include-multiallelic`, each ALT
-  allele is remapped to allele `1` and counted independently
+- **Multi-allelic**: skipped by default; with `--include-multiallelic`, original
+  genotypes are counted (`0/2`, `1/2`, …) with no remapping to `0/1`/`1/1`
 - **AF keys**: gnomAD uses `chrN_pos_ref_alt`; `--allele-freqs` uses `chrom:pos:ref:alt` (never VCF `ID`)
 - **Genotype field**: first sub-field of `FORMAT` (e.g. `0/1` from `0/1:25:15,10`)
 - **Missing samples**: raises if a child ID is absent from the VCF header
@@ -236,10 +238,10 @@ Set any of these parameters to enable per-call filtering (unset = no filter):
 |-----------|-----------|------|
 | `min_gq` | `GQ` | skip call if `GQ < min_gq` |
 | `min_dp` | `DP` | skip call if `DP < min_dp` |
-| `ab_threshold` | `AD` | for remapped `0/1` and `1/1`: require `AD[i] / sum(AD) > ab_threshold` |
+| `ab_threshold` | `AD` | for `0/k` and `k/k` (k>=1): require `AD[k] / sum(AD) > ab_threshold` |
 
-`0/0` calls are not subject to the AB filter. Allele balance is always
-`AD[i] / sum(AD)` for the allele being processed.
+`0/0` and mixed-alt calls such as `1/2` are not subject to the AB filter.
+Allele balance is `AD[k] / sum(AD)` for the non-ref allele in `0/k` or `k/k`.
 
 ### Repeat-region exclusion
 

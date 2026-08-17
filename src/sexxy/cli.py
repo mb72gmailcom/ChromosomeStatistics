@@ -95,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         "--include-multiallelic",
         action="store_true",
         help=(
-            "Process each ALT allele on multi-allelic rows separately "
-            "(default: skip comma-separated ALT)"
+            "Include multi-allelic rows and count original genotypes "
+            "(0/2, 1/2, …); default is to skip comma-separated ALT"
         ),
     )
     parser.add_argument(
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         "--ab-threshold",
         type=float,
         default=None,
-        help="For remapped 0/1 and 1/1 calls, require AD[i]/sum(AD) > threshold",
+        help="For 0/k and k/k calls, require AD[k]/sum(AD) > threshold",
     )
     parser.add_argument(
         "--min-gq-nonpar",
@@ -155,8 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         "--check-father",
         action="store_true",
         help=(
-            "chrY only: for male children, count how often 0/0, 0/1, and 1/1 "
-            "match the father's genotype (keys 0/0_f, 0/1_f, 1/1_f)"
+            "chrY only: for male children, count matching father genotypes "
+            "under keys {gt}_f (e.g. 0/0_f, 1/2_f)"
         ),
     )
     args = parser.parse_args(argv)

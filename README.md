@@ -90,8 +90,9 @@ For a given chromosome, the AF file is loaded once:
 {gnomad_af_dir}/{chrm}/{chrm}-common-af.json
 ```
 
-Keys are ``chrom:pos:ref:alt`` (one allele per key). Alleles with
-``df.get(key, 0) > common_freq_cutoff`` are skipped.
+Keys are ``pos_ref_alt`` (one allele per key; chromosome is in the filename).
+Alleles with ``df.get(key, 0) > common_freq_cutoff`` are skipped. Missing keys
+are treated as AF ``0`` and kept.
 
 ```python
 from sexxy import GnomadAfStore, compute_genotype_counts
@@ -222,7 +223,7 @@ allele). Without the flag, multi-allelic rows are skipped.
 - **SNVs only**: alleles where `len(REF) == 1` and `len(ALT allele) == 1`
 - **Multi-allelic**: skipped by default; with `--include-multiallelic`, each ALT
   allele is remapped to allele `1` and counted independently
-- **AF keys**: always `chrom:pos:ref:alt` (never VCF `ID`)
+- **AF keys**: gnomAD uses `pos_ref_alt`; `--allele-freqs` uses `chrom:pos:ref:alt` (never VCF `ID`)
 - **Genotype field**: first sub-field of `FORMAT` (e.g. `0/1` from `0/1:25:15,10`)
 - **Missing samples**: raises if a child ID is absent from the VCF header
 - Supports plain `.vcf` and `.vcf.gz`

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, IO, Mapping
 
 from sexxy.chrx import CHRX_REGION_ORDER, chrx_region, is_chrx
-from sexxy.gnomad import GnomadAfStore
+from sexxy.gnomad import GnomadAfStore, gnomad_af_key
 from sexxy.intervals import ExcludeIntervals, load_exclude_intervals
 from sexxy.metadata import filter_children_to_vcf, sample_column_indices
 from sexxy.results import GenotypeCountResult
@@ -516,9 +516,9 @@ def compute_genotype_counts(
     genotypes are remapped so that allele becomes ``1``, and each passing allele
     contributes its own genotype counts.
 
-    Allele frequency maps (*allele_freqs* or *gnomad_af*) are keyed by
-    ``chrom:pos:ref:alt``. Alleles with frequency above *common_freq_cutoff*
-    are skipped.
+    Alleles with frequency above *common_freq_cutoff* are skipped.
+    *gnomad_af* maps are keyed by ``pos_ref_alt``; *allele_freqs* maps are keyed
+    by ``chrom:pos:ref:alt``. Missing keys are treated as AF ``0`` (kept).
 
     Sample FORMAT fields are assumed to list ``GT`` first. When quality filters
     are enabled, ``GQ``, ``DP``, and ``AD`` are read by index from the FORMAT
@@ -526,7 +526,8 @@ def compute_genotype_counts(
 
     *allele_freqs* is a static ``chrom:pos:ref:alt`` -> AF map for this chromosome.
     *gnomad_af* is a base directory (or :class:`~sexxy.gnomad.GnomadAfStore`);
-    the file ``{chromosome}/{chromosome}-common-af.json`` is loaded once.
+    the file ``{chromosome}/{chromosome}-common-af.json`` is loaded once
+    (keys ``pos_ref_alt``).
 
     Per-genotype quality filters (each optional; filtering is enabled only
     when the parameter is set):
@@ -644,11 +645,9 @@ def compute_genotype_counts(
         for r in regions
     )
 
-    af_map: Mapping[str, float] | None = None
+    chrom_af: Mapping[str, float] | None = None
     if gnomad_store is not None:
-        af_map = gnomad_store.for_chromosome(chromosome)
-    elif allele_freqs is not None:
-        af_map = allele_freqs
+        chrom_af = gnomad_store.for_chromosome(chromosome)
 
     target_chrom_key = _chrom_key(chromosome)
     scan_chrx = is_chrx(chromosome)
@@ -696,9 +695,13 @@ def compute_genotype_counts(
                 if len(allele) != 1:
                     continue
                 allele_number = allele_idx + 1
-                if af_map is not None:
+                if chrom_af is not None:
+                    key = gnomad_af_key(pos, ref, allele)
+                    if float(chrom_af.get(key, 0)) > common_freq_cutoff:
+                        continue
+                elif allele_freqs is not None:
                     key = af_variant_key(chrom, pos, ref, allele)
-                    if float(af_map.get(key, 0)) > common_freq_cutoff:
+                    if float(allele_freqs.get(key, 0)) > common_freq_cutoff:
                         continue
 
                 if male_father_pairs:

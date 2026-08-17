@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from sexxy.chrx import chrx_region, CHRX_REGION_ORDER
-from sexxy.gnomad import GnomadAfStore, gnomad_af_path, load_gnomad_af_json
+from sexxy.gnomad import GnomadAfStore, gnomad_af_key, gnomad_af_path, load_gnomad_af_json
 from sexxy.metadata import filter_children_to_vcf, load_children_by_sex, _normalize_sex
 from sexxy.results import (
     CHRX_FEMALE_OUTPUT_KEYS,
@@ -184,8 +184,8 @@ def gnomad_dir(tmp_path: Path) -> Path:
     af_file.write_text(
         json.dumps(
             {
-                "chr1:100:A:G": 0.05,
-                "chr1:300:A:G": 0.001,
+                "100_A_G": 0.05,
+                "300_A_G": 0.001,
             }
         )
     )
@@ -199,8 +199,8 @@ def test_gnomad_af_path(gnomad_dir: Path):
 def test_load_gnomad_af_json(gnomad_dir: Path):
     path = gnomad_af_path(gnomad_dir, "chr1")
     assert load_gnomad_af_json(path) == {
-        "chr1:100:A:G": 0.05,
-        "chr1:300:A:G": 0.001,
+        "100_A_G": 0.05,
+        "300_A_G": 0.001,
     }
 
 
@@ -301,6 +301,7 @@ def test_remap_gt():
 
 def test_af_variant_key():
     assert af_variant_key("chr1", 100, "A", "G") == "chr1:100:A:G"
+    assert gnomad_af_key(100, "A", "G") == "100_A_G"
 
 
 def test_passes_genotype_filters_ab_only_on_het_hom_alt():

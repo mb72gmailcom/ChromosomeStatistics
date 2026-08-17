@@ -16,7 +16,7 @@ def gnomad_af_path(base_dir: str | Path, chrm: str) -> Path:
 
 
 def load_gnomad_af_json(path: str | Path) -> dict[str, float]:
-    """Load a gnomAD common-AF JSON file (variant id -> frequency)."""
+    """Load a gnomAD common-AF JSON file (``chrom:pos:ref:alt`` -> frequency)."""
     with open(path, "r") as f:
         data = json.load(f)
     if not isinstance(data, dict):
@@ -31,7 +31,7 @@ class GnomadAfStore:
 
         {base_dir}/{chrm}/{chrm}-common-af.json
 
-    Each file is a JSON object mapping variant IDs (VCF ID column) to AF.
+    Each file is a JSON object mapping ``chrom:pos:ref:alt`` keys to AF.
     """
 
     def __init__(self, base_dir: str | Path = DEFAULT_GNOMAD_AF_DIR):
@@ -48,5 +48,6 @@ class GnomadAfStore:
             self._by_chrom[chrm] = load_gnomad_af_json(gfile)
         return self._by_chrom[chrm]
 
-    def get(self, chrm: str, variant_id: str) -> float:
-        return float(self.for_chromosome(chrm).get(variant_id, 0))
+    def get(self, chrm: str, variant_key: str) -> float:
+        """Return AF for *variant_key* (``chrom:pos:ref:alt``), default ``0``."""
+        return float(self.for_chromosome(chrm).get(variant_key, 0))

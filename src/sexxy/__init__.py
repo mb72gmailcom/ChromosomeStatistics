@@ -5,7 +5,7 @@ from sexxy.gnomad import GnomadAfStore, DEFAULT_GNOMAD_AF_DIR, gnomad_af_path, l
 from sexxy.intervals import ExcludeIntervals, load_exclude_intervals
 from sexxy.metadata import load_children_by_sex
 from sexxy.results import GenotypeCountResult, resolve_output_target, write_genotype_count_results, write_run_params, write_skipped_contigs
-from sexxy.vcf import chrom_matches, compute_genotype_counts, is_snv
+from sexxy.vcf import af_variant_key, chrom_matches, compute_genotype_counts, is_snv
 
 __all__ = [
     "CHRX_REGIONS",
@@ -13,6 +13,7 @@ __all__ = [
     "ExcludeIntervals",
     "GenotypeCountResult",
     "GnomadAfStore",
+    "af_variant_key",
     "chrx_region",
     "chrom_matches",
     "compute_genotype_counts",

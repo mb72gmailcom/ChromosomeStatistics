@@ -1,4 +1,5 @@
 __pycache__/*
+.venv/
 PanGPA.log
 PanGPA.log.old
 src/sexxy/__pycache__/__init__.cpython-313.pyc

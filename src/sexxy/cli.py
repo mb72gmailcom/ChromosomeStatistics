@@ -67,22 +67,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metadata-sep", default=None, help="Metadata delimiter")
     parser.add_argument(
         "--allele-freqs",
-        help="Optional CSV/TSV with variant IDs and allele frequencies",
+        help=(
+            "Optional CSV/TSV of allele frequencies keyed by chrom:pos:ref:alt "
+            "(see --af-key-col)"
+        ),
     )
     parser.add_argument(
         "--gnomad-af-dir",
         default=None,
         help=(
-            "gnomAD v4 base directory with per-chromosome JSON files "
-            f"(default when set: {DEFAULT_GNOMAD_AF_DIR})"
+            "gnomAD v4 base directory with per-chromosome JSON files keyed by "
+            f"chrom:pos:ref:alt (default when set: {DEFAULT_GNOMAD_AF_DIR})"
         ),
     )
-    parser.add_argument("--af-key-col", default="id", help="Key column in AF file")
+    parser.add_argument(
+        "--af-key-col",
+        default="variant",
+        help="Column in --allele-freqs with chrom:pos:ref:alt keys (default: variant)",
+    )
     parser.add_argument(
         "--common-freq-cutoff",
         type=float,
         default=0.01,
-        help="Skip variants with AF above this cutoff (default: 0.01)",
+        help="Skip alleles with AF above this cutoff (default: 0.01)",
+    )
+    parser.add_argument(
+        "--include-multiallelic",
+        action="store_true",
+        help=(
+            "Process each ALT allele on multi-allelic rows separately "
+            "(default: skip comma-separated ALT)"
+        ),
     )
     parser.add_argument(
         "--min-gq",
@@ -100,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         "--ab-threshold",
         type=float,
         default=None,
-        help="For 0/1 and 1/1 calls, require AB > threshold",
+        help="For remapped 0/1 and 1/1 calls, require AD[i]/sum(AD) > threshold",
     )
     parser.add_argument(
         "--min-gq-nonpar",
@@ -193,7 +208,6 @@ def main(argv: list[str] | None = None) -> int:
         allele_freqs=allele_freqs,
         gnomad_af=gnomad_af,
         common_freq_cutoff=args.common_freq_cutoff,
-        af_key_col=args.af_key_col,
         min_gq=args.min_gq,
         min_dp=args.min_dp,
         ab_threshold=args.ab_threshold,
@@ -205,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         on_excluded=_report_excluded,
         check_father=args.check_father,
         male_father_by_child=male_father_by_child,
+        include_multiallelic=args.include_multiallelic,
     )
 
     n_male = result.male_cohort_size
@@ -275,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
             "strict": args.strict,
             "check_father": args.check_father,
             "exclude_repeats": args.exclude_repeats,
+            "include_multiallelic": args.include_multiallelic,
         },
         "cohort": {
             "metadata_male": len(male_children),

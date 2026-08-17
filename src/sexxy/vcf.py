@@ -47,6 +47,34 @@ def _unphased_gt(gt: str) -> str:
     return gt.replace("|", "/")
 
 
+def af_variant_key(chrom: str, pos: str | int, ref: str, alt: str) -> str:
+    """Return ``chrom:pos:ref:alt`` AF lookup key for one allele."""
+    return f"{chrom}:{pos}:{ref}:{alt}"
+
+
+def _remap_gt(gt: str, allele_number: int) -> str | None:
+    """Remap *gt* so VCF allele *allele_number* becomes ``1``.
+
+    Other non-ref alleles make the call unusable for this allele (``None``).
+    Phased genotypes are converted to unphased ``/`` form.
+    """
+    gt_u = _unphased_gt(gt)
+    if gt_u in (".", "./.", ""):
+        return gt_u if gt_u else "."
+    target = str(allele_number)
+    remapped: list[str] = []
+    for allele in gt_u.split("/"):
+        if allele == ".":
+            remapped.append(".")
+        elif allele == "0":
+            remapped.append("0")
+        elif allele == target:
+            remapped.append("1")
+        else:
+            return None
+    return "/".join(remapped)
+
+
 def _parse_sample_fields(format_str: str, sample_field: str) -> dict[str, str]:
     keys = format_str.split(":")
     vals = sample_field.split(":")
@@ -55,34 +83,32 @@ def _parse_sample_fields(format_str: str, sample_field: str) -> dict[str, str]:
     return dict(zip(keys, vals))
 
 
-def _allele_balance(fields: Mapping[str, str]) -> float | None:
-    ab = fields.get("AB", ".")
-    if ab not in (".", ""):
-        try:
-            return float(ab)
-        except ValueError:
-            pass
-
-    ad = fields.get("AD", ".")
+def _allele_balance_from_ad(ad: str, allele_index: int) -> float | None:
+    """Return ``AD[allele_index] / sum(AD)``, or ``None`` if unusable."""
     if ad in (".", ""):
         return None
-    parts = ad.split(",")
-    if len(parts) == 1:
+    ad_parts = ad.split(",")
+    if len(ad_parts) == 1:
         try:
-            int(parts[0])
+            int(ad_parts[0])
         except ValueError:
             return None
         return 1.0
-    if len(parts) < 2:
+    if allele_index < 0 or allele_index >= len(ad_parts):
         return None
     try:
-        ref, alt = int(parts[0]), int(parts[1])
+        depths = [int(x) for x in ad_parts]
     except ValueError:
         return None
-    total = ref + alt
+    total = sum(depths)
     if total == 0:
         return None
-    return alt / total
+    return depths[allele_index] / total
+
+
+def _allele_balance(fields: Mapping[str, str], *, allele_index: int = 1) -> float | None:
+    """Allele balance from ``AD`` as ``AD[allele_index] / sum(AD)``."""
+    return _allele_balance_from_ad(fields.get("AD", "."), allele_index)
 
 
 def _passes_genotype_filters(
@@ -91,6 +117,7 @@ def _passes_genotype_filters(
     min_gq: float | None,
     min_dp: int | None,
     ab_threshold: float | None,
+    allele_index: int = 1,
 ) -> bool:
     gt = _unphased_gt(fields.get("GT", "."))
     if gt in (".", "./."):
@@ -117,7 +144,7 @@ def _passes_genotype_filters(
             return False
 
     if ab_threshold is not None and gt in ("0/1", "1/1"):
-        ab = _allele_balance(fields)
+        ab = _allele_balance(fields, allele_index=allele_index)
         if ab is None or ab <= ab_threshold:
             return False
 
@@ -132,16 +159,23 @@ def _count_if_passes(
     min_gq: float | None,
     min_dp: int | None,
     ab_threshold: float | None,
+    allele_number: int = 1,
 ) -> None:
     fields = _parse_sample_fields(format_str, sample_field)
+    remapped = _remap_gt(fields.get("GT", "."), allele_number)
+    if remapped is None:
+        return
+    fields = dict(fields)
+    fields["GT"] = remapped
     if not _passes_genotype_filters(
         fields,
         min_gq=min_gq,
         min_dp=min_dp,
         ab_threshold=ab_threshold,
+        allele_index=allele_number,
     ):
         return
-    counts[fields.get("GT", ".").split(":")[0]] += 1
+    counts[remapped] += 1
 
 
 @dataclass(frozen=True)
@@ -151,7 +185,6 @@ class _FieldIndices:
     gq: int | None
     dp: int | None
     ad: int | None
-    ab: int | None
 
 
 @dataclass(frozen=True)
@@ -176,41 +209,18 @@ def _field_indices(format_str: str) -> _FieldIndices:
         gq=idx.get("GQ"),
         dp=idx.get("DP"),
         ad=idx.get("AD"),
-        ab=idx.get("AB"),
     )
 
 
-def _allele_balance_from_parts(parts: list[str], indices: _FieldIndices) -> float | None:
-    if indices.ab is not None and indices.ab < len(parts):
-        ab = parts[indices.ab]
-        if ab not in (".", ""):
-            try:
-                return float(ab)
-            except ValueError:
-                pass
-
+def _allele_balance_from_parts(
+    parts: list[str],
+    indices: _FieldIndices,
+    *,
+    allele_index: int = 1,
+) -> float | None:
     if indices.ad is None or indices.ad >= len(parts):
         return None
-    ad = parts[indices.ad]
-    if ad in (".", ""):
-        return None
-    ad_parts = ad.split(",")
-    if len(ad_parts) == 1:
-        try:
-            int(ad_parts[0])
-        except ValueError:
-            return None
-        return 1.0
-    if len(ad_parts) < 2:
-        return None
-    try:
-        ref, alt = int(ad_parts[0]), int(ad_parts[1])
-    except ValueError:
-        return None
-    total = ref + alt
-    if total == 0:
-        return None
-    return alt / total
+    return _allele_balance_from_ad(parts[indices.ad], allele_index)
 
 
 def _passes_gq_dp(
@@ -255,6 +265,8 @@ def _passes_gq_dp_ab(
     parts: list[str],
     indices: _FieldIndices,
     settings: _FilterSettings,
+    *,
+    allele_index: int = 1,
 ) -> bool:
     gt = _unphased_gt(parts[0] if parts else ".")
     if gt in (".", "./."):
@@ -264,16 +276,36 @@ def _passes_gq_dp_ab(
         return False
 
     if settings.ab_threshold is not None and gt in ("0/1", "1/1"):
-        ab = _allele_balance_from_parts(parts, indices)
+        ab = _allele_balance_from_parts(parts, indices, allele_index=allele_index)
         if ab is None or ab <= settings.ab_threshold:
             return False
 
     return True
 
 
-def _count_gt_only(dd: list[str], sample_indices: list[int], counts: Counter[str]) -> None:
+def _with_remapped_gt(parts: list[str], allele_number: int) -> list[str] | None:
+    if not parts:
+        return None
+    remapped = _remap_gt(parts[0], allele_number)
+    if remapped is None:
+        return None
+    out = list(parts)
+    out[0] = remapped
+    return out
+
+
+def _count_gt_only(
+    dd: list[str],
+    sample_indices: list[int],
+    counts: Counter[str],
+    *,
+    allele_number: int = 1,
+) -> None:
     for ci in sample_indices:
-        counts[dd[ci].split(":", 1)[0]] += 1
+        remapped = _remap_gt(dd[ci].split(":", 1)[0], allele_number)
+        if remapped is None:
+            continue
+        counts[remapped] += 1
 
 
 def _count_gq_dp(
@@ -282,10 +314,14 @@ def _count_gq_dp(
     counts: Counter[str],
     indices: _FieldIndices,
     settings: _FilterSettings,
+    *,
+    allele_number: int = 1,
 ) -> None:
     min_gq, min_dp = settings.min_gq, settings.min_dp
     for ci in sample_indices:
-        parts = dd[ci].split(":")
+        parts = _with_remapped_gt(dd[ci].split(":"), allele_number)
+        if parts is None:
+            continue
         if not _passes_gq_dp(parts, indices, min_gq=min_gq, min_dp=min_dp):
             continue
         counts[parts[0]] += 1
@@ -297,10 +333,14 @@ def _count_gq_dp_ab(
     counts: Counter[str],
     indices: _FieldIndices,
     settings: _FilterSettings,
+    *,
+    allele_number: int = 1,
 ) -> None:
     for ci in sample_indices:
-        parts = dd[ci].split(":")
-        if not _passes_gq_dp_ab(parts, indices, settings):
+        parts = _with_remapped_gt(dd[ci].split(":"), allele_number)
+        if parts is None:
+            continue
+        if not _passes_gq_dp_ab(parts, indices, settings, allele_index=allele_number):
             continue
         counts[parts[0]] += 1
 
@@ -311,16 +351,18 @@ def _count_samples(
     counts: Counter[str],
     settings: _FilterSettings,
     indices: _FieldIndices | None,
+    *,
+    allele_number: int = 1,
 ) -> None:
     mode = settings.count_mode
     if mode == "gt_only":
-        _count_gt_only(dd, sample_indices, counts)
+        _count_gt_only(dd, sample_indices, counts, allele_number=allele_number)
     elif mode == "gq_dp":
         assert indices is not None
-        _count_gq_dp(dd, sample_indices, counts, indices, settings)
+        _count_gq_dp(dd, sample_indices, counts, indices, settings, allele_number=allele_number)
     else:
         assert indices is not None
-        _count_gq_dp_ab(dd, sample_indices, counts, indices, settings)
+        _count_gq_dp_ab(dd, sample_indices, counts, indices, settings, allele_number=allele_number)
 
 
 _FATHER_MATCH_GTS = frozenset({"0/0", "0/1", "1/1"})
@@ -331,8 +373,12 @@ def _child_gt_if_passes(
     ci: int,
     settings: _FilterSettings,
     indices: _FieldIndices | None,
+    *,
+    allele_number: int = 1,
 ) -> str | None:
-    parts = dd[ci].split(":")
+    parts = _with_remapped_gt(dd[ci].split(":"), allele_number)
+    if parts is None:
+        return None
     mode = settings.count_mode
     if mode == "gt_only":
         return parts[0]
@@ -340,7 +386,7 @@ def _child_gt_if_passes(
     if mode == "gq_dp":
         if not _passes_gq_dp(parts, indices, min_gq=settings.min_gq, min_dp=settings.min_dp):
             return None
-    elif not _passes_gq_dp_ab(parts, indices, settings):
+    elif not _passes_gq_dp_ab(parts, indices, settings, allele_index=allele_number):
         return None
     return parts[0]
 
@@ -351,16 +397,20 @@ def _count_samples_with_father_match(
     counts: Counter[str],
     settings: _FilterSettings,
     indices: _FieldIndices | None,
+    *,
+    allele_number: int = 1,
 ) -> None:
     for child_ci, father_ci in child_father_pairs:
-        child_gt = _child_gt_if_passes(dd, child_ci, settings, indices)
+        child_gt = _child_gt_if_passes(
+            dd, child_ci, settings, indices, allele_number=allele_number
+        )
         if child_gt is None:
             continue
         counts[child_gt] += 1
         child_gt_u = _unphased_gt(child_gt)
         if child_gt_u in _FATHER_MATCH_GTS:
-            father_gt = _unphased_gt(dd[father_ci].split(":", 1)[0])
-            if father_gt == child_gt_u:
+            father_gt = _remap_gt(dd[father_ci].split(":", 1)[0], allele_number)
+            if father_gt is not None and _unphased_gt(father_gt) == child_gt_u:
                 counts[f"{child_gt_u}_f"] += 1
 
 
@@ -389,7 +439,7 @@ def _region_filter_settings(
 
 
 def is_snv(ref: str, alt: str) -> bool:
-    """Return True only for SNVs: ``len(ref) == 1`` and ``len(alt) == 1``.
+    """Return True only for single-allele SNVs: ``len(ref) == 1`` and ``len(alt) == 1``.
 
     Multi-allelic ``ALT`` fields (comma-separated) are excluded.
     """
@@ -438,7 +488,6 @@ def compute_genotype_counts(
     allele_freqs: Mapping[str, float] | None = None,
     gnomad_af: str | Path | GnomadAfStore | None = None,
     common_freq_cutoff: float = 0.01,
-    af_key_col: str = "id",
     min_gq: float | None = None,
     min_dp: int | None = None,
     ab_threshold: float | None = None,
@@ -450,6 +499,7 @@ def compute_genotype_counts(
     on_excluded: Callable[[list[str], list[str]], None] | None = None,
     check_father: bool = False,
     male_father_by_child: Mapping[str, str] | None = None,
+    include_multiallelic: bool = False,
 ) -> GenotypeCountResult:
     """Scan *vcf_path* once and count genotypes for male and female children.
 
@@ -460,14 +510,21 @@ def compute_genotype_counts(
     For chrX, counts are accumulated separately in three regions: ``Par1``,
     ``noPar``, and ``Par2``. Other chromosomes use a single ``all`` region.
 
-    Only SNVs are included. Variants with frequency above *common_freq_cutoff*
-    are skipped when *allele_freqs* or *gnomad_af* is provided.
+    Only SNV alleles are included (``len(REF) == 1`` and ``len(ALT allele) == 1``).
+    By default multi-allelic rows (comma-separated ``ALT``) are skipped. When
+    *include_multiallelic* is ``True``, each ALT allele is processed separately:
+    genotypes are remapped so that allele becomes ``1``, and each passing allele
+    contributes its own genotype counts.
+
+    Allele frequency maps (*allele_freqs* or *gnomad_af*) are keyed by
+    ``chrom:pos:ref:alt``. Alleles with frequency above *common_freq_cutoff*
+    are skipped.
 
     Sample FORMAT fields are assumed to list ``GT`` first. When quality filters
-    are enabled, ``GQ``, ``DP``, and ``AD``/``AB`` are read by index from the
-    FORMAT column.
+    are enabled, ``GQ``, ``DP``, and ``AD`` are read by index from the FORMAT
+    column.
 
-    *allele_freqs* is a static variant-id -> AF map for this chromosome.
+    *allele_freqs* is a static ``chrom:pos:ref:alt`` -> AF map for this chromosome.
     *gnomad_af* is a base directory (or :class:`~sexxy.gnomad.GnomadAfStore`);
     the file ``{chromosome}/{chromosome}-common-af.json`` is loaded once.
 
@@ -479,9 +536,9 @@ def compute_genotype_counts(
     *min_dp*
         Skip calls with read depth (``DP``) below this value.
     *ab_threshold*
-        Allele-balance filter applied only to ``0/1`` and ``1/1`` genotypes.
-        Require ``AB > ab_threshold``. ``AB`` is read from the sample field
-        when present, otherwise computed from ``AD``.
+        Allele-balance filter applied only to remapped ``0/1`` and ``1/1``
+        genotypes. Require ``AD[i] / sum(AD) > ab_threshold`` for the allele
+        being processed (``i`` is the VCF allele index).
     *min_gq_nonpar*, *min_dp_nonpar*, *ab_threshold_nonpar*
         Optional overrides used only for **male** calls in the chrX ``noPar``
         region. Each defaults to the corresponding global filter when unset.
@@ -499,10 +556,14 @@ def compute_genotype_counts(
     *check_father*
         When ``True`` on chrY, for each male child also count how often
         ``0/0``, ``0/1``, and ``1/1`` match the father's genotype under
-        keys ``0/0_f``, ``0/1_f``, and ``1/1_f``.
+        keys ``0/0_f``, ``0/1_f``, and ``1/1_f``. Child and father genotypes
+        are remapped to the allele being processed before comparison.
     *male_father_by_child*
         Child sample ID to father sample ID map (required when
         *check_father* is ``True``).
+    *include_multiallelic*
+        When ``True``, expand comma-separated ``ALT`` fields and process each
+        SNV allele independently.
 
     Returns a :class:`~sexxy.results.GenotypeCountResult`.
     """
@@ -583,13 +644,14 @@ def compute_genotype_counts(
         for r in regions
     )
 
-    chrom_af: Mapping[str, float] | None = None
+    af_map: Mapping[str, float] | None = None
     if gnomad_store is not None:
-        chrom_af = gnomad_store.for_chromosome(chromosome)
+        af_map = gnomad_store.for_chromosome(chromosome)
+    elif allele_freqs is not None:
+        af_map = allele_freqs
 
     target_chrom_key = _chrom_key(chromosome)
     scan_chrx = is_chrx(chromosome)
-    use_variant_af_key = allele_freqs is not None and af_key_col == "variant"
     field_indices: _FieldIndices | None = None
     skipped_contigs: Counter[str] = Counter()
     excluded_repeat_rows = 0
@@ -603,11 +665,15 @@ def compute_genotype_counts(
             if len(parts) < 10:
                 continue
 
-            chrom, pos, vid, ref, alt = parts[0], parts[1], parts[2], parts[3], parts[4]
+            chrom, pos, _vid, ref, alt = parts[0], parts[1], parts[2], parts[3], parts[4]
             if _chrom_key(chrom) != target_chrom_key:
                 skipped_contigs[chrom] += 1
                 continue
-            if not is_snv(ref, alt):
+            if len(ref) != 1:
+                continue
+
+            alts = alt.split(",")
+            if len(alts) > 1 and not include_multiallelic:
                 continue
 
             pos_i = int(pos)
@@ -622,30 +688,46 @@ def compute_genotype_counts(
             else:
                 region = "all"
 
-            if chrom_af is not None:
-                if float(chrom_af.get(vid, 0)) > common_freq_cutoff:
-                    continue
-            elif allele_freqs is not None:
-                key = f"{chrom}:{pos}:{ref}:{alt}" if use_variant_af_key else vid
-                if float(allele_freqs.get(key, 0)) > common_freq_cutoff:
-                    continue
-
             if need_field_indices and field_indices is None:
                 field_indices = _field_indices(parts[8])
 
             dd = parts[9:]
-            if male_father_pairs:
-                _count_samples_with_father_match(
-                    dd,
-                    male_father_pairs,
-                    dgt_m[region],
-                    male_settings[region],
-                    field_indices,
-                )
-            elif male_ind:
-                _count_samples(dd, male_ind, dgt_m[region], male_settings[region], field_indices)
-            if female_ind:
-                _count_samples(dd, female_ind, dgt_f[region], female_settings[region], field_indices)
+            for allele_idx, allele in enumerate(alts):
+                if len(allele) != 1:
+                    continue
+                allele_number = allele_idx + 1
+                if af_map is not None:
+                    key = af_variant_key(chrom, pos, ref, allele)
+                    if float(af_map.get(key, 0)) > common_freq_cutoff:
+                        continue
+
+                if male_father_pairs:
+                    _count_samples_with_father_match(
+                        dd,
+                        male_father_pairs,
+                        dgt_m[region],
+                        male_settings[region],
+                        field_indices,
+                        allele_number=allele_number,
+                    )
+                elif male_ind:
+                    _count_samples(
+                        dd,
+                        male_ind,
+                        dgt_m[region],
+                        male_settings[region],
+                        field_indices,
+                        allele_number=allele_number,
+                    )
+                if female_ind:
+                    _count_samples(
+                        dd,
+                        female_ind,
+                        dgt_f[region],
+                        female_settings[region],
+                        field_indices,
+                        allele_number=allele_number,
+                    )
 
     return GenotypeCountResult(
         chromosome=chromosome,

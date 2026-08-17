@@ -66,7 +66,7 @@ def test_check_father_chrY_counts(chry_vcf: Path, chry_metadata: Path):
         "0/1_f": 1,
         "1/1_f": 1,
     }
-    assert result.female_counts() == {"0/0": 2, "0/1": 1}
+    assert result.female_counts() == {"0/0": 3, "0/1": 1}
 
 
 def test_check_father_off(chry_vcf: Path, chry_metadata: Path):

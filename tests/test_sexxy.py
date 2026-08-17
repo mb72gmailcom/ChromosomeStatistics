@@ -5,7 +5,7 @@ import pytest
 
 from sexxy.chrx import chrx_region, CHRX_REGION_ORDER
 from sexxy.gnomad import GnomadAfStore, gnomad_af_path, load_gnomad_af_json
-from sexxy.metadata import filter_children_to_vcf, load_children_by_sex
+from sexxy.metadata import filter_children_to_vcf, load_children_by_sex, _normalize_sex
 from sexxy.results import (
     CHRX_FEMALE_OUTPUT_KEYS,
     CHRX_MALE_OUTPUT_KEYS,
@@ -20,6 +20,8 @@ from sexxy.vcf import (
     _field_indices,
     _passes_genotype_filters,
     _parse_sample_fields,
+    _remap_gt,
+    af_variant_key,
     chrom_matches,
     compute_genotype_counts,
     get_n_fields,
@@ -155,7 +157,10 @@ def test_chromosome_filter_and_prefix(tmp_path: Path, metadata_path: Path):
 
 def test_compute_genotype_counts_with_af_filter(vcf_path: Path, metadata_path: Path, tmp_path: Path):
     male, female, _ = load_children_by_sex(metadata_path, sep="\t")
-    af = {"rs1": 0.05, "rs3": 0.001}
+    af = {
+        "chr1:100:A:G": 0.05,
+        "chr1:300:A:G": 0.001,
+    }
     result = compute_genotype_counts(
         vcf_path,
         male,
@@ -164,7 +169,7 @@ def test_compute_genotype_counts_with_af_filter(vcf_path: Path, metadata_path: P
         allele_freqs=af,
         common_freq_cutoff=0.01,
     )
-    # rs1 filtered (AF 0.05), only rs3 remains
+    # chr1:100:A:G filtered (AF 0.05), only chr1:300:A:G remains
     assert result.male_counts() == {"1/1": 1}
     assert result.female_counts() == {"0/0": 1}
 
@@ -176,7 +181,14 @@ def gnomad_dir(tmp_path: Path) -> Path:
     chrom_dir = af_dir / chrm
     chrom_dir.mkdir(parents=True)
     af_file = chrom_dir / f"{chrm}-common-af.json"
-    af_file.write_text(json.dumps({"rs1": 0.05, "rs3": 0.001}))
+    af_file.write_text(
+        json.dumps(
+            {
+                "chr1:100:A:G": 0.05,
+                "chr1:300:A:G": 0.001,
+            }
+        )
+    )
     return af_dir
 
 
@@ -186,7 +198,10 @@ def test_gnomad_af_path(gnomad_dir: Path):
 
 def test_load_gnomad_af_json(gnomad_dir: Path):
     path = gnomad_af_path(gnomad_dir, "chr1")
-    assert load_gnomad_af_json(path) == {"rs1": 0.05, "rs3": 0.001}
+    assert load_gnomad_af_json(path) == {
+        "chr1:100:A:G": 0.05,
+        "chr1:300:A:G": 0.001,
+    }
 
 
 def test_compute_genotype_counts_with_gnomad_af(
@@ -250,16 +265,42 @@ def test_ab_threshold_filter(filtered_vcf_path: Path, metadata_path: Path):
 
 def test_allele_balance_from_ad():
     fields = _parse_sample_fields("GT:DP:AD", "0/1:30:12,18")
-    assert _allele_balance(fields) == pytest.approx(0.6)
+    assert _allele_balance(fields, allele_index=1) == pytest.approx(0.6)
     indices = _field_indices("GT:DP:AD")
-    assert _allele_balance_from_parts("0/1:30:12,18".split(":"), indices) == pytest.approx(0.6)
+    assert _allele_balance_from_parts(
+        "0/1:30:12,18".split(":"), indices, allele_index=1
+    ) == pytest.approx(0.6)
+
+
+def test_allele_balance_multiallelic_ad():
+    # AD = ref, alt1, alt2 → for allele 2 use AD[2]/sum(AD)
+    fields = _parse_sample_fields("GT:DP:AD", "0/2:30:10,5,15")
+    assert _allele_balance(fields, allele_index=2) == pytest.approx(0.5)
+    indices = _field_indices("GT:DP:AD")
+    assert _allele_balance_from_parts(
+        "0/2:30:10,5,15".split(":"), indices, allele_index=2
+    ) == pytest.approx(0.5)
 
 
 def test_allele_balance_haploid_ad():
     fields = _parse_sample_fields("GT:DP:AD", "1:30:25")
-    assert _allele_balance(fields) == 1.0
+    assert _allele_balance(fields, allele_index=1) == 1.0
     indices = _field_indices("GT:DP:AD")
-    assert _allele_balance_from_parts("1:30:25".split(":"), indices) == 1.0
+    assert _allele_balance_from_parts(
+        "1:30:25".split(":"), indices, allele_index=1
+    ) == 1.0
+
+
+def test_remap_gt():
+    assert _remap_gt("0/2", 2) == "0/1"
+    assert _remap_gt("2/2", 2) == "1/1"
+    assert _remap_gt("0/1", 2) is None
+    assert _remap_gt("0|2", 2) == "0/1"
+    assert _remap_gt("0/0", 2) == "0/0"
+
+
+def test_af_variant_key():
+    assert af_variant_key("chr1", 100, "A", "G") == "chr1:100:A:G"
 
 
 def test_passes_genotype_filters_ab_only_on_het_hom_alt():
@@ -270,6 +311,53 @@ def test_passes_genotype_filters_ab_only_on_het_hom_alt():
     assert not _passes_genotype_filters(
         het_bad, min_gq=None, min_dp=None, ab_threshold=0.2
     )
+
+
+def test_include_multiallelic_expands_alleles(tmp_path: Path, metadata_path: Path):
+    path = tmp_path / "multi.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tc1\tc2\n"
+        "chr1\t100\t.\tA\tG,T\t.\t.\t.\tGT:DP\t0/1:30\t0/2:25\n"
+    )
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+
+    skipped = compute_genotype_counts(path, male, female, chromosome="chr1")
+    assert skipped.male_counts() == {}
+    assert skipped.female_counts() == {}
+
+    result = compute_genotype_counts(
+        path, male, female, chromosome="chr1", include_multiallelic=True
+    )
+    # allele G: c1 0/1 → 0/1, c2 0/2 → skip; allele T: c1 0/1 → skip, c2 0/2 → 0/1
+    assert result.male_counts() == {"0/1": 1}
+    assert result.female_counts() == {"0/1": 1}
+
+
+def test_include_multiallelic_af_per_allele(tmp_path: Path, metadata_path: Path):
+    path = tmp_path / "multi_af.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tc1\tc2\n"
+        "chr1\t100\t.\tA\tG,T\t.\t.\t.\tGT:DP\t0/1:30\t0/2:25\n"
+    )
+    male, female, _ = load_children_by_sex(metadata_path, sep="\t")
+    af = {
+        "chr1:100:A:G": 0.001,
+        "chr1:100:A:T": 0.05,
+    }
+    result = compute_genotype_counts(
+        path,
+        male,
+        female,
+        chromosome="chr1",
+        include_multiallelic=True,
+        allele_freqs=af,
+        common_freq_cutoff=0.01,
+    )
+    # T skipped by AF; only G counted (male 0/1)
+    assert result.male_counts() == {"0/1": 1}
+    assert result.female_counts() == {}
 
 
 @pytest.mark.parametrize(

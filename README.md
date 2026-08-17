@@ -90,15 +90,8 @@ For a given chromosome, the AF file is loaded once:
 {gnomad_af_dir}/{chrm}/{chrm}-common-af.json
 ```
 
-Example (matches the reference workflow):
-
-```python
-chrm = "chr1"
-gfile = f"/mnt/home/mbershadsky/ceph/gnomad.v4/{chrm}/{chrm}-common-af.json"
-with open(gfile) as f:
-    df = json.load(f)
-# variants with df.get(variant_id, 0) > 0.01 are skipped
-```
+Keys are ``chrom:pos:ref:alt`` (one allele per key). Alleles with
+``df.get(key, 0) > common_freq_cutoff`` are skipped.
 
 ```python
 from sexxy import GnomadAfStore, compute_genotype_counts
@@ -210,19 +203,26 @@ sexxy cohort.chr1.vcf.gz metadata.tsv \
   --output-dir results/
 ```
 
-Or a flat chromosome-specific allele-frequency file:
+Or a flat chromosome-specific allele-frequency file (keys ``chrom:pos:ref:alt``):
 
 ```bash
 sexxy cohort.chr1.vcf.gz metadata.tsv \
   --chromosome chr1 \
   --allele-freqs chr1-common-af.tsv \
-  --af-key-col id \
+  --af-key-col variant \
   --output-dir results/
 ```
 
+Use ``--include-multiallelic`` to expand comma-separated ``ALT`` fields and
+process each SNV allele separately (AF, genotype remapping, and AB use that
+allele). Without the flag, multi-allelic rows are skipped.
+
 ## Behavior
 
-- **SNVs only**: rows where `len(REF) == 1` and `len(ALT) == 1`
+- **SNVs only**: alleles where `len(REF) == 1` and `len(ALT allele) == 1`
+- **Multi-allelic**: skipped by default; with `--include-multiallelic`, each ALT
+  allele is remapped to allele `1` and counted independently
+- **AF keys**: always `chrom:pos:ref:alt` (never VCF `ID`)
 - **Genotype field**: first sub-field of `FORMAT` (e.g. `0/1` from `0/1:25:15,10`)
 - **Missing samples**: raises if a child ID is absent from the VCF header
 - Supports plain `.vcf` and `.vcf.gz`
@@ -235,9 +235,10 @@ Set any of these parameters to enable per-call filtering (unset = no filter):
 |-----------|-----------|------|
 | `min_gq` | `GQ` | skip call if `GQ < min_gq` |
 | `min_dp` | `DP` | skip call if `DP < min_dp` |
-| `ab_threshold` | `AB` or `AD` | for `0/1` and `1/1`: require `AB > ab_threshold` |
+| `ab_threshold` | `AD` | for remapped `0/1` and `1/1`: require `AD[i] / sum(AD) > ab_threshold` |
 
-`0/0` calls are not subject to the AB filter. When `AB` is absent, it is computed as `alt / (ref + alt)` from `AD`.
+`0/0` calls are not subject to the AB filter. Allele balance is always
+`AD[i] / sum(AD)` for the allele being processed.
 
 ### Repeat-region exclusion
 

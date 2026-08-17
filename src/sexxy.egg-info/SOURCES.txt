@@ -1,9 +1,13 @@
 README.md
 pyproject.toml
 src/sexxy/__init__.py
+src/sexxy/chrx.py
 src/sexxy/cli.py
 src/sexxy/gnomad.py
+src/sexxy/intervals.py
 src/sexxy/metadata.py
+src/sexxy/results.py
+src/sexxy/table.py
 src/sexxy/vcf.py
 src/sexxy.egg-info/PKG-INFO
 src/sexxy.egg-info/SOURCES.txt
@@ -11,4 +15,9 @@ src/sexxy.egg-info/dependency_links.txt
 src/sexxy.egg-info/entry_points.txt
 src/sexxy.egg-info/requires.txt
 src/sexxy.egg-info/top_level.txt
+tests/test_check_father.py
+tests/test_cohort_filter.py
+tests/test_exclude_repeats.py
+tests/test_run_params.py
 tests/test_sexxy.py
+tests/test_skipped_contigs.py

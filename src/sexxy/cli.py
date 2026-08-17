@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "gnomAD v4 base directory with per-chromosome JSON files keyed by "
-            f"pos_ref_alt (default when set: {DEFAULT_GNOMAD_AF_DIR})"
+            f"chrN_pos_ref_alt (default when set: {DEFAULT_GNOMAD_AF_DIR})"
         ),
     )
     parser.add_argument(

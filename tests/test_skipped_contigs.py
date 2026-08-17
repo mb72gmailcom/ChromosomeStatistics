@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from sexxy.cli import main
+from sexxy.gnomad import GnomadAfStore
 from sexxy.metadata import load_children_by_sex
 from sexxy.results import write_skipped_contigs
 from sexxy.vcf import _chrom_key, compute_genotype_counts
@@ -32,6 +33,38 @@ def test_compute_genotype_counts_skipped_contigs(tmp_path: Path):
     }
     assert result.male_counts() == {"0/0": 1}
     assert result.female_counts() == {"0/1": 1}
+
+
+def test_skipped_contigs_not_treated_as_gnomad_hits(tmp_path: Path):
+    meta = tmp_path / "metadata.tsv"
+    meta.write_text(
+        "spid\tfather\tmother\tsex\n"
+        "c1\tp1\tp2\tmale\n"
+        "c2\tp1\tp2\tfemale\n"
+    )
+    vcf = tmp_path / "mixed.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tc1\tc2\n"
+        "chr1\t100\trs1\tA\tG\t.\t.\t.\tGT:DP\t0/0:30\t0/1:25\n"
+        "chr1_KI270706v1_random\t100\trs2\tA\tG\t.\t.\t.\tGT:DP\t1/1:30\t1/1:30\n"
+        "chr1\t300\trs3\tA\tG\t.\t.\t.\tGT:DP\t1/1:30\t0/0:30\n"
+    )
+    af_dir = tmp_path / "gnomad.v4" / "chr1"
+    af_dir.mkdir(parents=True)
+    (af_dir / "chr1-common-af.json").write_text(json.dumps({"chr1_100_A_G": 0.05}))
+    male, female, _ = load_children_by_sex(meta, sep="\t")
+    result = compute_genotype_counts(
+        vcf,
+        male,
+        female,
+        chromosome="chr1",
+        gnomad_af=GnomadAfStore(tmp_path / "gnomad.v4"),
+        common_freq_cutoff=0.01,
+    )
+    assert result.skipped_contigs == {"chr1_KI270706v1_random": 1}
+    assert result.male_counts() == {"1/1": 1}
+    assert result.female_counts() == {"0/0": 1}
 
 
 def test_write_skipped_contigs(tmp_path: Path):

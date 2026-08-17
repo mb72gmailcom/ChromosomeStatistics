@@ -21,6 +21,7 @@ from sexxy.vcf import (
     _passes_genotype_filters,
     _parse_sample_fields,
     _remap_gt,
+    _split_vcf_prefix,
     af_variant_key,
     chrom_matches,
     compute_genotype_counts,
@@ -115,6 +116,14 @@ def test_get_n_fields():
     assert get_n_fields(line, 5) == ["chr1", "100", "rs1", "A", "G"]
 
 
+def test_split_vcf_prefix():
+    line = "chr1\t100\trs1\tA\tG\t.\t.\t.\tGT\t0/0:30\t0/1:25\n"
+    chrom, pos, vid, ref, alt, rest = _split_vcf_prefix(line)
+    assert (chrom, pos, vid, ref, alt) == ("chr1", "100", "rs1", "A", "G")
+    assert rest.startswith(".\t.\t.\tGT\t")
+    assert _split_vcf_prefix("chr1\t100\trs1\tA\tG\n") is None
+
+
 @pytest.mark.parametrize(
     ("ref", "alt", "expected"),
     [
@@ -184,8 +193,8 @@ def gnomad_dir(tmp_path: Path) -> Path:
     af_file.write_text(
         json.dumps(
             {
-                "100_A_G": 0.05,
-                "300_A_G": 0.001,
+                "chr1_100_A_G": 0.05,
+                "chr1_300_A_G": 0.001,
             }
         )
     )
@@ -199,8 +208,8 @@ def test_gnomad_af_path(gnomad_dir: Path):
 def test_load_gnomad_af_json(gnomad_dir: Path):
     path = gnomad_af_path(gnomad_dir, "chr1")
     assert load_gnomad_af_json(path) == {
-        "100_A_G": 0.05,
-        "300_A_G": 0.001,
+        "chr1_100_A_G": 0.05,
+        "chr1_300_A_G": 0.001,
     }
 
 
@@ -297,11 +306,17 @@ def test_remap_gt():
     assert _remap_gt("0/1", 2) is None
     assert _remap_gt("0|2", 2) == "0/1"
     assert _remap_gt("0/0", 2) == "0/0"
+    assert _remap_gt("0/0", 1) == "0/0"
+    assert _remap_gt("0/1", 1) == "0/1"
+    assert _remap_gt("1/1", 1) == "1/1"
+    assert _remap_gt("0|1", 1) == "0/1"
+    assert _remap_gt("0/2", 1) is None
+    assert _remap_gt("1", 1) == "1"
 
 
 def test_af_variant_key():
     assert af_variant_key("chr1", 100, "A", "G") == "chr1:100:A:G"
-    assert gnomad_af_key(100, "A", "G") == "100_A_G"
+    assert gnomad_af_key("chr1", 100, "A", "G") == "chr1_100_A_G"
 
 
 def test_passes_genotype_filters_ab_only_on_het_hom_alt():

@@ -65,6 +65,7 @@ def test_skipped_contigs_not_treated_as_gnomad_hits(tmp_path: Path):
     assert result.skipped_contigs == {"chr1_KI270706v1_random": 1}
     assert result.male_counts() == {"1/1": 1}
     assert result.female_counts() == {"0/0": 1}
+    assert result.skipped_common_variants == 1
 
 
 def test_write_skipped_contigs(tmp_path: Path):

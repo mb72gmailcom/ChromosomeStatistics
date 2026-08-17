@@ -181,6 +181,7 @@ def test_compute_genotype_counts_with_af_filter(vcf_path: Path, metadata_path: P
     # chr1:100:A:G filtered (AF 0.05), only chr1:300:A:G remains
     assert result.male_counts() == {"1/1": 1}
     assert result.female_counts() == {"0/0": 1}
+    assert result.skipped_common_variants == 1
 
 
 @pytest.fixture
@@ -223,6 +224,7 @@ def test_compute_genotype_counts_with_gnomad_af(
     )
     assert result.male_counts() == {"1/1": 1}
     assert result.female_counts() == {"0/0": 1}
+    assert result.skipped_common_variants == 1
 
 
 @pytest.fixture
@@ -374,6 +376,7 @@ def test_include_multiallelic_af_per_allele(tmp_path: Path, metadata_path: Path)
     # T skipped by AF; only G counted (male 0/1)
     assert result.male_counts() == {"0/1": 1}
     assert result.female_counts() == {}
+    assert result.skipped_common_variants == 1
 
 
 @pytest.mark.parametrize(

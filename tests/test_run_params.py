@@ -65,5 +65,7 @@ def test_cli_writes_params_file(run_fixtures, tmp_path: Path, capsys):
     assert (out_dir / "counts.chr1.male.json").is_file()
     assert (out_dir / "counts.chr1.female.json").is_file()
     assert str(params_path) in data["output_files"]
-    stderr = capsys.readouterr().err
-    assert "counts.chr1.params.json" in stderr
+    assert data["skipped_common_variants"] == 0
+    captured = capsys.readouterr()
+    assert "counts.chr1.params.json" in captured.err
+    assert "skipped common variants: 0" in captured.out

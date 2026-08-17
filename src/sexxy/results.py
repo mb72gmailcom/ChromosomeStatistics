@@ -30,6 +30,7 @@ class GenotypeCountResult:
     skipped_contigs: dict[str, int] = field(default_factory=dict)
     excluded_repeat_rows: int = 0
     exclude_repeat_intervals: int = 0
+    skipped_common_variants: int = 0
 
     def male_counts(self, region: str | None = None) -> dict[str, int]:
         return self._counts(self.male, region)

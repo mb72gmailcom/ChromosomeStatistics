@@ -662,7 +662,8 @@ def compute_genotype_counts(
     parsed. *gnomad_af* maps are keyed by ``chrN_pos_ref_alt``; *allele_freqs* maps
     are keyed by ``chrom:pos:ref:alt``. Missing keys are treated as AF ``0``
     (kept). Input VCFs are chromosome-specific; non-matching contigs are
-    counted in *skipped_contigs* and not AF-filtered.
+    counted in *skipped_contigs* and not AF-filtered. The number of SNV alleles
+    skipped as common is returned in *skipped_common_variants*.
 
     Sample FORMAT fields are assumed to list ``GT`` first. When quality filters
     are enabled, ``GQ``, ``DP``, and ``AD`` are read by index from the FORMAT
@@ -811,6 +812,7 @@ def compute_genotype_counts(
     indices_ref = _IndicesRef()
     skipped_contigs: Counter[str] = Counter()
     excluded_repeat_rows = 0
+    skipped_common_variants = 0
 
     if male_father_pairs:
         count_male = {
@@ -844,6 +846,7 @@ def compute_genotype_counts(
                 if len(alt) != 1:
                     continue
                 if not allele_passes_af(chrom, pos, ref, alt):
+                    skipped_common_variants += 1
                     continue
                 keep_alleles: tuple[int, ...] | list[int] = (1,)
             else:
@@ -854,6 +857,7 @@ def compute_genotype_counts(
                     if len(allele) != 1:
                         continue
                     if not allele_passes_af(chrom, pos, ref, allele):
+                        skipped_common_variants += 1
                         continue
                     keep_list.append(allele_idx + 1)
                 if not keep_list:
@@ -899,4 +903,5 @@ def compute_genotype_counts(
         skipped_contigs=dict(skipped_contigs),
         excluded_repeat_rows=excluded_repeat_rows,
         exclude_repeat_intervals=exclude_repeat_intervals,
+        skipped_common_variants=skipped_common_variants,
     )

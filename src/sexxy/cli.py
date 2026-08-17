@@ -226,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     n_female = result.female_cohort_size
     if n_male or n_female:
         print(f"Cohort: {n_male} male, {n_female} female", file=sys.stderr)
+    print(f"skipped common variants: {result.skipped_common_variants}")
     if result.excluded_repeat_rows:
         print(
             f"Excluded {result.excluded_repeat_rows} variant rows in "
@@ -304,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         "total_skipped_rows": total_skipped,
         "exclude_repeat_intervals": result.exclude_repeat_intervals,
         "excluded_repeat_rows": result.excluded_repeat_rows,
+        "skipped_common_variants": result.skipped_common_variants,
         "output_files": [str(p) for p in paths],
     }
     params_path = write_run_params(output_target, args.chromosome, params)
